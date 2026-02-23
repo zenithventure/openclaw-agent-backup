@@ -3,3 +3,4 @@
 *.db-shm
 backup-service
 .env
+.aws-sam/
