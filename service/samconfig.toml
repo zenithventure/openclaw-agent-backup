@@ -1,0 +1,12 @@
+# SAM CLI configuration
+# Run: sam deploy --guided (first time) to generate/update this file
+
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "openclaw-backup-service"
+resolve_s3 = true
+s3_prefix = "openclaw-backup-service"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"

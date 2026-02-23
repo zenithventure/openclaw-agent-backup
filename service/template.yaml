@@ -1,0 +1,162 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: OpenClaw Backup Service — serverless deployment
+
+Parameters:
+  RetentionDays:
+    Type: Number
+    Default: 7
+  DefaultQuotaBytes:
+    Type: Number
+    Default: 524288000  # 500 MB
+  RegisterRateLimit:
+    Type: Number
+    Default: 10
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 128
+    Runtime: provided.al2023
+    Architectures:
+      - arm64
+
+Resources:
+
+  # -----------------------------------------------------------------------
+  # S3 Bucket for encrypted backup blobs
+  # -----------------------------------------------------------------------
+  BackupBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "openclaw-backups-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-backups
+            Status: Enabled
+            ExpirationInDays: 10  # retention + 3 day buffer for TTL lag
+      VersioningConfiguration:
+        Status: Suspended
+
+  # -----------------------------------------------------------------------
+  # DynamoDB Tables
+  # -----------------------------------------------------------------------
+  AgentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: openclaw-backup-agents
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: token_hash
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: token-hash-index
+          KeySchema:
+            - AttributeName: token_hash
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
+  BackupsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: openclaw-backup-backups
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: agent_id
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: agent_id
+          KeyType: HASH
+        - AttributeName: timestamp
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+
+  # -----------------------------------------------------------------------
+  # Lambda Function
+  # -----------------------------------------------------------------------
+  BackupServiceFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      CodeUri: .
+      Handler: bootstrap
+      Environment:
+        Variables:
+          STORE_MODE: dynamo
+          DYNAMO_AGENTS_TABLE: !Ref AgentsTable
+          DYNAMO_BACKUPS_TABLE: !Ref BackupsTable
+          S3_BUCKET: !Ref BackupBucket
+          S3_REGION: !Ref AWS::Region
+          RETENTION_DAYS: !Ref RetentionDays
+          DEFAULT_QUOTA_BYTES: !Ref DefaultQuotaBytes
+          REGISTER_RATE_LIMIT: !Ref RegisterRateLimit
+          PRESIGN_EXPIRY_SECONDS: 900
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AgentsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref BackupsTable
+        - S3CrudPolicy:
+            BucketName: !Ref BackupBucket
+      Events:
+        CatchAll:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref BackupApi
+
+  # -----------------------------------------------------------------------
+  # HTTP API (API Gateway v2)
+  # -----------------------------------------------------------------------
+  BackupApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: "$default"
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowMethods:
+          - GET
+          - POST
+          - DELETE
+          - OPTIONS
+        AllowHeaders:
+          - Authorization
+          - Content-Type
+      # API Gateway built-in throttling (replaces in-memory rate limiter)
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 20
+        ThrottlingRateLimit: 10
+
+Outputs:
+  ApiUrl:
+    Description: Backup Service API URL
+    Value: !Sub "https://${BackupApi}.execute-api.${AWS::Region}.amazonaws.com"
+  BucketName:
+    Description: S3 bucket for encrypted backups
+    Value: !Ref BackupBucket
+  AgentsTableName:
+    Description: DynamoDB table for agents
+    Value: !Ref AgentsTable
+  BackupsTableName:
+    Description: DynamoDB table for backups
+    Value: !Ref BackupsTable
