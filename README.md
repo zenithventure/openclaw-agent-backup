@@ -155,15 +155,38 @@ OPENCLAW_BACKUP_URL=http://localhost:8080 bash scripts/setup.sh
 | `GET` | `/v1/backups` | Bearer | List backup snapshots |
 | `GET` | `/v1/backups/{timestamp}` | Bearer | Get backup metadata |
 | `POST` | `/v1/backups/download-url` | Bearer | Get presigned S3 download URLs |
-| `DELETE` | `/v1/backups/{timestamp}` | Bearer (active) | Delete a specific backup |
-| `DELETE` | `/v1/backups` | Bearer (active) | Delete all backups |
+| `DELETE` | `/v1/backups/{timestamp}` | Bearer (active) | Soft-delete a backup (recoverable) |
+| `DELETE` | `/v1/backups` | Bearer (active) | Soft-delete all backups (recoverable) |
+| `POST` | `/v1/backups/{timestamp}/undelete` | Bearer (active) | Restore a soft-deleted backup |
 | `GET` | `/v1/admin/agents` | X-API-Key | List agents (optional `?status=` filter) |
 | `POST` | `/v1/admin/agents/{id}/approve` | X-API-Key | Approve a pending agent |
 | `POST` | `/v1/admin/agents/{id}/suspend` | X-API-Key | Suspend an active agent |
 
 **Agent lifecycle:** `register → pending → (admin approves) → active → (admin suspends) → suspended`
 
-Server-side config: set `ADMIN_API_KEY` env var to protect admin endpoints. If empty, admin endpoints are open (useful for local dev).
+## Server Configuration
+
+| Env Variable | Description | Default |
+|-------------|-------------|---------|
+| `ADMIN_API_KEY` | API key(s) for admin endpoints, comma-separated for zero-downtime rotation (empty = disabled) | `""` |
+| `MAX_UPLOAD_BYTES` | Max single upload size in bytes | `5242880` (5 MB) |
+| `MIN_BACKUP_INTERVAL_HOURS` | Minimum hours between backups per agent | `12` |
+| `MAX_BACKUPS_PER_AGENT` | Max backups retained per agent (oldest auto-rotated) | `7` |
+| `MAX_PENDING_AGENTS` | Global cap on pending registrations | `100` |
+| `DELETE_GRACE_HOURS` | Hours before soft-deleted backups are permanently purged | `72` |
+| `DEFAULT_QUOTA_BYTES` | Storage quota per agent | `524288000` (500 MB) |
+| `REGISTER_RATE_LIMIT` | Registration requests per minute per IP | `10` |
+| `RETENTION_DAYS` | DynamoDB TTL retention for backups | `7` |
+
+### Security features
+
+- **Quota enforcement**: Presigned S3 upload URLs include `Content-Length` — S3 rejects uploads that don't match the declared size
+- **Upload size limit**: Individual uploads capped at `MAX_UPLOAD_BYTES` (default 5 MB)
+- **Backup frequency limit**: Agents can only upload once per `MIN_BACKUP_INTERVAL_HOURS` (default 12h)
+- **Backup rotation**: Only `MAX_BACKUPS_PER_AGENT` (default 7) backups are kept; oldest are auto-deleted when a new one arrives
+- **Registration throttle**: No more than `MAX_PENDING_AGENTS` (default 100) pending registrations allowed globally
+- **Soft-delete protection**: Deleted backups are recoverable via `/undelete` for `DELETE_GRACE_HOURS` (default 72h) — S3 objects are preserved during the grace period
+- **Admin key rotation**: `ADMIN_API_KEY` accepts comma-separated keys — deploy with `old,new`, migrate clients, then remove the old key
 
 ## License
 

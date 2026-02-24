@@ -90,6 +90,7 @@ func buildHandler(store DataStore, s3client *S3Client, cfg *Config) http.Handler
 	mux.Handle("POST /v1/backups/upload-url", Auth(store, RequireActive(http.HandlerFunc(h.UploadURL))))
 	mux.Handle("DELETE /v1/backups", Auth(store, RequireActive(http.HandlerFunc(h.DeleteAllBackups))))
 	mux.Handle("DELETE /v1/backups/{timestamp}", Auth(store, RequireActive(http.HandlerFunc(h.DeleteBackup))))
+	mux.Handle("POST /v1/backups/{timestamp}/undelete", Auth(store, RequireActive(http.HandlerFunc(h.UndeleteBackup))))
 
 	// Authenticated (read endpoints — pending/suspended agents can still use these)
 	mux.Handle("GET /v1/backups", Auth(store, http.HandlerFunc(h.ListBackups)))

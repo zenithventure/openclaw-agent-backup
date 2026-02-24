@@ -37,12 +37,17 @@ type Config struct {
 	AdminAPIKey string
 
 	// Limits
-	DefaultQuotaBytes int64
-	RegisterRateLimit int // requests per minute per IP
-	PresignExpiry     time.Duration
+	DefaultQuotaBytes      int64
+	RegisterRateLimit      int   // requests per minute per IP
+	MaxUploadBytes         int64 // max single upload size in bytes (default 5MB)
+	MinBackupIntervalHours int   // minimum hours between backups (default 12)
+	MaxBackupsPerAgent     int   // max backups to keep per agent (default 7)
+	MaxPendingAgents       int   // max pending registrations (default 100)
+	PresignExpiry          time.Duration
 
 	// Retention (free tier defaults)
-	RetentionDays int
+	RetentionDays    int
+	DeleteGraceHours int // hours before soft-deleted backups are purged (default 72)
 }
 
 func LoadConfig() *Config {
@@ -68,10 +73,15 @@ func LoadConfig() *Config {
 		S3ForcePathStyle:   envOr("S3_FORCE_PATH_STYLE", "false") == "true",
 		TokenSecret:        envOr("TOKEN_SECRET", "change-me-in-production"),
 		AdminAPIKey:        os.Getenv("ADMIN_API_KEY"),
-		DefaultQuotaBytes:  envInt64("DEFAULT_QUOTA_BYTES", 500*1024*1024), // 500 MB
-		RegisterRateLimit:  int(envInt64("REGISTER_RATE_LIMIT", 10)),
-		PresignExpiry:      time.Duration(envInt64("PRESIGN_EXPIRY_SECONDS", 900)) * time.Second,
-		RetentionDays:      int(envInt64("RETENTION_DAYS", 7)),
+		DefaultQuotaBytes:      envInt64("DEFAULT_QUOTA_BYTES", 500*1024*1024), // 500 MB
+		RegisterRateLimit:      int(envInt64("REGISTER_RATE_LIMIT", 10)),
+		MaxUploadBytes:         envInt64("MAX_UPLOAD_BYTES", 5*1024*1024), // 5 MB
+		MinBackupIntervalHours: int(envInt64("MIN_BACKUP_INTERVAL_HOURS", 12)),
+		MaxBackupsPerAgent:     int(envInt64("MAX_BACKUPS_PER_AGENT", 7)),
+		MaxPendingAgents:       int(envInt64("MAX_PENDING_AGENTS", 100)),
+		PresignExpiry:          time.Duration(envInt64("PRESIGN_EXPIRY_SECONDS", 900)) * time.Second,
+		RetentionDays:          int(envInt64("RETENTION_DAYS", 7)),
+		DeleteGraceHours:       int(envInt64("DELETE_GRACE_HOURS", 72)),
 	}
 }
 

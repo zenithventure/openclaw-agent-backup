@@ -178,10 +178,12 @@ MANIFEST_PUT_URL=$(echo "$RESP_BODY" | jq -r '.urls["manifest.json"]')
 # -----------------------------------------------------------------------
 info "10. Upload via presigned URLs"
 
-echo "fake-encrypted-backup-data" > /tmp/test-backup.enc
+# Create a file of exactly 1024 bytes to match encrypted_bytes in the upload-url request
+dd if=/dev/zero of=/tmp/test-backup.enc bs=1024 count=1 2>/dev/null
 
 do_curl -X PUT \
     -H "Content-Type: application/octet-stream" \
+    -H "Content-Length: 1024" \
     --data-binary "@/tmp/test-backup.enc" \
     "$BACKUP_PUT_URL"
 assert_status "PUT backup.tar.gz.enc to S3" "200" "$RESP_STATUS"
@@ -227,16 +229,18 @@ do_curl -X POST \
 assert_status "POST /v1/backups/download-url" "200" "$RESP_STATUS"
 assert_json "has backup download URL" '.urls["backup.tar.gz.enc"] | length > 0' "true" "$RESP_BODY"
 
-# Download and verify content
+# Download and verify content is 1024 bytes
 BACKUP_GET_URL=$(echo "$RESP_BODY" | jq -r '.urls["backup.tar.gz.enc"]')
-DOWNLOADED=$(curl -s "$BACKUP_GET_URL")
-if [[ "$DOWNLOADED" == "fake-encrypted-backup-data" ]]; then
-    green "  PASS: downloaded content matches uploaded"
+curl -s -o /tmp/test-downloaded.enc "$BACKUP_GET_URL"
+DL_SIZE=$(wc -c < /tmp/test-downloaded.enc | tr -d ' ')
+if [[ "$DL_SIZE" == "1024" ]]; then
+    green "  PASS: downloaded content size matches uploaded (1024 bytes)"
     PASS=$((PASS + 1))
 else
-    red "  FAIL: downloaded content mismatch"
+    red "  FAIL: downloaded content size mismatch (expected 1024, got $DL_SIZE)"
     FAIL=$((FAIL + 1))
 fi
+rm -f /tmp/test-downloaded.enc
 
 # -----------------------------------------------------------------------
 # 14. Get non-existent backup
@@ -298,15 +302,69 @@ do_admin_curl -X POST "$BASE_URL/v1/admin/agents/$AGENT_ID/approve"
 assert_status "POST re-approve" "200" "$RESP_STATUS"
 
 # -----------------------------------------------------------------------
-# 18. Delete specific backup
+# 18. Delete backup (soft-delete)
 # -----------------------------------------------------------------------
-info "18. Delete backup"
+info "18. Delete backup (soft-delete)"
 do_curl -X DELETE -H "Authorization: Bearer $TOKEN" "$BASE_URL/v1/backups/2026-02-22T030000Z"
 assert_status "DELETE /v1/backups/{timestamp}" "200" "$RESP_STATUS"
+assert_json "has can_undelete_until" '.can_undelete_until | length > 0' "true" "$RESP_BODY"
 
-# Verify it's gone
+# Verify it's hidden from list
 do_curl -H "Authorization: Bearer $TOKEN" "$BASE_URL/v1/backups"
-assert_json "backup deleted" '.count' "0" "$RESP_BODY"
+assert_json "backup hidden after soft-delete" '.count' "0" "$RESP_BODY"
+
+# -----------------------------------------------------------------------
+# 19. Undelete backup
+# -----------------------------------------------------------------------
+info "19. Undelete backup"
+do_curl -X POST -H "Authorization: Bearer $TOKEN" "$BASE_URL/v1/backups/2026-02-22T030000Z/undelete"
+assert_status "POST /v1/backups/{timestamp}/undelete" "200" "$RESP_STATUS"
+
+# Verify it's restored
+do_curl -H "Authorization: Bearer $TOKEN" "$BASE_URL/v1/backups"
+assert_json "backup restored after undelete" '.count' "1" "$RESP_BODY"
+
+# -----------------------------------------------------------------------
+# 20. Undelete non-existent backup (should 404)
+# -----------------------------------------------------------------------
+info "20. Undelete non-existent backup"
+do_curl -X POST -H "Authorization: Bearer $TOKEN" "$BASE_URL/v1/backups/1999-01-01T000000Z/undelete"
+assert_status "POST /v1/backups/{nonexistent}/undelete" "404" "$RESP_STATUS"
+
+# -----------------------------------------------------------------------
+# 21. Upload too large (should 400)
+# -----------------------------------------------------------------------
+info "21. Upload too large"
+do_curl -X POST \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"timestamp":"2026-02-23T030000Z","encrypted_bytes":999999999,"encrypted_sha256":"abc"}' \
+    "$BASE_URL/v1/backups/upload-url"
+assert_status "POST /v1/backups/upload-url (too large)" "400" "$RESP_STATUS"
+
+# -----------------------------------------------------------------------
+# 22. Multi-key admin auth
+# -----------------------------------------------------------------------
+info "22. Multi-key admin auth"
+if [[ -n "$ADMIN_KEY" ]]; then
+    # Current key should still work
+    do_curl -H "X-API-Key: $ADMIN_KEY" "$BASE_URL/v1/admin/agents"
+    assert_status "admin auth with current key" "200" "$RESP_STATUS"
+
+    # Wrong key should fail
+    do_curl -H "X-API-Key: wrong-key" "$BASE_URL/v1/admin/agents"
+    assert_status "admin auth with wrong key" "401" "$RESP_STATUS"
+else
+    green "  SKIP: no ADMIN_API_KEY set (multi-key test requires key)"
+    PASS=$((PASS + 1))
+fi
+
+# -----------------------------------------------------------------------
+# 23. Clean up — delete backup for real
+# -----------------------------------------------------------------------
+info "23. Final cleanup"
+do_curl -X DELETE -H "Authorization: Bearer $TOKEN" "$BASE_URL/v1/backups/2026-02-22T030000Z"
+assert_status "DELETE backup for cleanup" "200" "$RESP_STATUS"
 
 # -----------------------------------------------------------------------
 # Summary

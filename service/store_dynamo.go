@@ -15,10 +15,11 @@ import (
 
 // DynamoStore implements DataStore using DynamoDB (for Lambda deployment).
 type DynamoStore struct {
-	client       *dynamodb.Client
-	agentsTable  string
-	backupsTable string
-	retentionDays int
+	client          *dynamodb.Client
+	agentsTable     string
+	backupsTable    string
+	retentionDays   int
+	deleteGraceHours int
 }
 
 // DynamoDB item schemas
@@ -49,7 +50,8 @@ type dynamoBackup struct {
 	S3Key           string `dynamodbav:"s3_key"`
 	ManifestS3Key   string `dynamodbav:"manifest_s3_key"`
 	CreatedAt       string `dynamodbav:"created_at"`
-	ExpiresAt       int64  `dynamodbav:"expires_at"` // TTL attribute
+	ExpiresAt       int64  `dynamodbav:"expires_at"`    // TTL attribute
+	DeletedAt       string `dynamodbav:"deleted_at,omitempty"`
 }
 
 func NewDynamoStore(ctx context.Context, cfg *Config) (*DynamoStore, error) {
@@ -72,10 +74,11 @@ func NewDynamoStore(ctx context.Context, cfg *Config) (*DynamoStore, error) {
 	client := dynamodb.NewFromConfig(awsCfg, clientOpts...)
 
 	return &DynamoStore{
-		client:        client,
-		agentsTable:   cfg.DynamoAgentsTable,
-		backupsTable:  cfg.DynamoBackupsTable,
-		retentionDays: cfg.RetentionDays,
+		client:           client,
+		agentsTable:      cfg.DynamoAgentsTable,
+		backupsTable:     cfg.DynamoBackupsTable,
+		retentionDays:    cfg.RetentionDays,
+		deleteGraceHours: cfg.DeleteGraceHours,
 	}, nil
 }
 
@@ -222,6 +225,24 @@ func (s *DynamoStore) ListAgents(status string) ([]Agent, error) {
 	return agents, nil
 }
 
+func (s *DynamoStore) CountAgentsByStatus(status string) (int, error) {
+	out, err := s.client.Scan(context.Background(), &dynamodb.ScanInput{
+		TableName:        aws.String(s.agentsTable),
+		FilterExpression: aws.String("#s = :s"),
+		ExpressionAttributeNames: map[string]string{
+			"#s": "status",
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":s": &types.AttributeValueMemberS{Value: status},
+		},
+		Select: types.SelectCount,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("count agents by status: %w", err)
+	}
+	return int(out.Count), nil
+}
+
 func (s *DynamoStore) UpdateAgentStatus(id, status string) error {
 	_, err := s.client.UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
 		TableName: aws.String(s.agentsTable),
@@ -284,8 +305,10 @@ func (s *DynamoStore) ListBackups(agentID string, limit int) ([]Backup, error) {
 	out, err := s.client.Query(context.Background(), &dynamodb.QueryInput{
 		TableName:              aws.String(s.backupsTable),
 		KeyConditionExpression: aws.String("agent_id = :aid"),
+		FilterExpression:       aws.String("attribute_not_exists(deleted_at) OR deleted_at = :empty"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":aid": &types.AttributeValueMemberS{Value: agentID},
+			":aid":   &types.AttributeValueMemberS{Value: agentID},
+			":empty": &types.AttributeValueMemberS{Value: ""},
 		},
 		ScanIndexForward: aws.Bool(false), // newest first
 		Limit:            aws.Int32(int32(limit)),
@@ -306,13 +329,14 @@ func (s *DynamoStore) ListBackups(agentID string, limit int) ([]Backup, error) {
 }
 
 func (s *DynamoStore) CountBackups(agentID string) (int, int64, error) {
-	// Query all backups for this agent to sum bytes
-	// For large datasets, consider a counter attribute on the agent item
+	// Query all non-deleted backups for this agent to sum bytes
 	out, err := s.client.Query(context.Background(), &dynamodb.QueryInput{
 		TableName:              aws.String(s.backupsTable),
 		KeyConditionExpression: aws.String("agent_id = :aid"),
+		FilterExpression:       aws.String("attribute_not_exists(deleted_at) OR deleted_at = :empty"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":aid": &types.AttributeValueMemberS{Value: agentID},
+			":aid":   &types.AttributeValueMemberS{Value: agentID},
+			":empty": &types.AttributeValueMemberS{Value: ""},
 		},
 		ProjectionExpression: aws.String("encrypted_bytes"),
 	})
@@ -321,7 +345,9 @@ func (s *DynamoStore) CountBackups(agentID string) (int, int64, error) {
 	}
 
 	var totalBytes int64
+	count := 0
 	for _, item := range out.Items {
+		count++
 		if v, ok := item["encrypted_bytes"]; ok {
 			if n, ok := v.(*types.AttributeValueMemberN); ok {
 				b, _ := strconv.ParseInt(n.Value, 10, 64)
@@ -330,7 +356,7 @@ func (s *DynamoStore) CountBackups(agentID string) (int, int64, error) {
 		}
 	}
 
-	return int(out.Count), totalBytes, nil
+	return count, totalBytes, nil
 }
 
 func (s *DynamoStore) GetBackup(agentID, timestamp string) (*Backup, error) {
@@ -347,7 +373,14 @@ func (s *DynamoStore) GetBackup(agentID, timestamp string) (*Backup, error) {
 	if out.Item == nil {
 		return nil, nil
 	}
-	return unmarshalBackup(out.Item)
+	b, err := unmarshalBackup(out.Item)
+	if err != nil {
+		return nil, err
+	}
+	if b.DeletedAt != nil {
+		return nil, nil // treat soft-deleted as not found
+	}
+	return b, nil
 }
 
 func (s *DynamoStore) DeleteBackup(agentID, timestamp string) (*Backup, error) {
@@ -357,11 +390,19 @@ func (s *DynamoStore) DeleteBackup(agentID, timestamp string) (*Backup, error) {
 		return nil, err
 	}
 
-	_, err = s.client.DeleteItem(context.Background(), &dynamodb.DeleteItemInput{
+	now := time.Now().UTC()
+	graceExpiry := now.Add(time.Duration(s.deleteGraceHours) * time.Hour)
+
+	_, err = s.client.UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
 		TableName: aws.String(s.backupsTable),
 		Key: map[string]types.AttributeValue{
 			"agent_id":  &types.AttributeValueMemberS{Value: agentID},
 			"timestamp": &types.AttributeValueMemberS{Value: timestamp},
+		},
+		UpdateExpression: aws.String("SET deleted_at = :da, expires_at = :ea"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":da": &types.AttributeValueMemberS{Value: now.Format(time.RFC3339)},
+			":ea": &types.AttributeValueMemberN{Value: strconv.FormatInt(graceExpiry.Unix(), 10)},
 		},
 	})
 	if err != nil {
@@ -378,19 +419,73 @@ func (s *DynamoStore) DeleteAllBackups(agentID string) ([]Backup, error) {
 		return nil, err
 	}
 
-	// DynamoDB doesn't have bulk delete — delete one by one
+	now := time.Now().UTC()
+	graceExpiry := now.Add(time.Duration(s.deleteGraceHours) * time.Hour)
+
+	// Soft-delete each backup
 	for _, b := range backups {
-		_, _ = s.client.DeleteItem(context.Background(), &dynamodb.DeleteItemInput{
+		_, _ = s.client.UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
 			TableName: aws.String(s.backupsTable),
 			Key: map[string]types.AttributeValue{
 				"agent_id":  &types.AttributeValueMemberS{Value: b.AgentID},
 				"timestamp": &types.AttributeValueMemberS{Value: b.Timestamp},
+			},
+			UpdateExpression: aws.String("SET deleted_at = :da, expires_at = :ea"),
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":da": &types.AttributeValueMemberS{Value: now.Format(time.RFC3339)},
+				":ea": &types.AttributeValueMemberN{Value: strconv.FormatInt(graceExpiry.Unix(), 10)},
 			},
 		})
 	}
 
 	_ = s.UpdateUsedBytes(agentID)
 	return backups, nil
+}
+
+func (s *DynamoStore) UndeleteBackup(agentID, timestamp string) error {
+	// Get the raw item (including soft-deleted)
+	out, err := s.client.GetItem(context.Background(), &dynamodb.GetItemInput{
+		TableName: aws.String(s.backupsTable),
+		Key: map[string]types.AttributeValue{
+			"agent_id":  &types.AttributeValueMemberS{Value: agentID},
+			"timestamp": &types.AttributeValueMemberS{Value: timestamp},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("get backup for undelete: %w", err)
+	}
+	if out.Item == nil {
+		return fmt.Errorf("backup not found or not deleted")
+	}
+
+	// Check if it's actually soft-deleted
+	b, err := unmarshalBackup(out.Item)
+	if err != nil {
+		return err
+	}
+	if b.DeletedAt == nil {
+		return fmt.Errorf("backup not found or not deleted")
+	}
+
+	// Restore: remove deleted_at, reset expires_at to original retention
+	newExpiry := time.Now().UTC().Add(time.Duration(s.retentionDays*24) * time.Hour)
+	_, err = s.client.UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(s.backupsTable),
+		Key: map[string]types.AttributeValue{
+			"agent_id":  &types.AttributeValueMemberS{Value: agentID},
+			"timestamp": &types.AttributeValueMemberS{Value: timestamp},
+		},
+		UpdateExpression: aws.String("REMOVE deleted_at SET expires_at = :ea"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":ea": &types.AttributeValueMemberN{Value: strconv.FormatInt(newExpiry.Unix(), 10)},
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	_ = s.UpdateUsedBytes(agentID)
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -436,7 +531,7 @@ func unmarshalBackup(item map[string]types.AttributeValue) (*Backup, error) {
 
 	createdAt, _ := time.Parse(time.RFC3339, db.CreatedAt)
 
-	return &Backup{
+	b := &Backup{
 		AgentID:         db.AgentID,
 		Timestamp:       db.Timestamp,
 		EncryptedBytes:  db.EncryptedBytes,
@@ -445,5 +540,14 @@ func unmarshalBackup(item map[string]types.AttributeValue) (*Backup, error) {
 		S3Key:           db.S3Key,
 		ManifestS3Key:   db.ManifestS3Key,
 		CreatedAt:       createdAt,
-	}, nil
+	}
+
+	if db.DeletedAt != "" {
+		t, err := time.Parse(time.RFC3339, db.DeletedAt)
+		if err == nil {
+			b.DeletedAt = &t
+		}
+	}
+
+	return b, nil
 }

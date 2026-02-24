@@ -87,6 +87,23 @@ func (c *S3Client) PresignPut(ctx context.Context, key string, contentType strin
 	return resp.URL, nil
 }
 
+// PresignPutWithLength generates a presigned PUT URL with a fixed Content-Length.
+// S3 will reject uploads where the actual body size doesn't match.
+func (c *S3Client) PresignPutWithLength(ctx context.Context, key, contentType string, contentLength int64) (string, error) {
+	input := &s3.PutObjectInput{
+		Bucket:        aws.String(c.bucket),
+		Key:           aws.String(key),
+		ContentType:   aws.String(contentType),
+		ContentLength: aws.Int64(contentLength),
+	}
+
+	resp, err := c.presigner.PresignPutObject(ctx, input, s3.WithPresignExpires(c.expiry))
+	if err != nil {
+		return "", fmt.Errorf("presign PUT %s: %w", key, err)
+	}
+	return resp.URL, nil
+}
+
 // PresignGet generates a presigned GET URL for downloading an object.
 func (c *S3Client) PresignGet(ctx context.Context, key string) (string, error) {
 	input := &s3.GetObjectInput{

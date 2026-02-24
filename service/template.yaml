@@ -16,7 +16,22 @@ Parameters:
     Type: String
     Default: ""
     NoEcho: true
-    Description: API key required for admin endpoints (empty = disabled)
+    Description: API key(s) for admin endpoints, comma-separated for rotation (empty = disabled)
+  MaxUploadBytes:
+    Type: Number
+    Default: 5242880  # 5 MB
+  MinBackupIntervalHours:
+    Type: Number
+    Default: 12
+  MaxBackupsPerAgent:
+    Type: Number
+    Default: 7
+  MaxPendingAgents:
+    Type: Number
+    Default: 100
+  DeleteGraceHours:
+    Type: Number
+    Default: 72
 
 Globals:
   Function:
@@ -116,6 +131,11 @@ Resources:
           DEFAULT_QUOTA_BYTES: !Ref DefaultQuotaBytes
           REGISTER_RATE_LIMIT: !Ref RegisterRateLimit
           ADMIN_API_KEY: !Ref AdminAPIKey
+          MAX_UPLOAD_BYTES: !Ref MaxUploadBytes
+          MIN_BACKUP_INTERVAL_HOURS: !Ref MinBackupIntervalHours
+          MAX_BACKUPS_PER_AGENT: !Ref MaxBackupsPerAgent
+          MAX_PENDING_AGENTS: !Ref MaxPendingAgents
+          DELETE_GRACE_HOURS: !Ref DeleteGraceHours
           PRESIGN_EXPIRY_SECONDS: 900
       Policies:
         - DynamoDBCrudPolicy:

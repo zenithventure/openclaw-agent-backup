@@ -20,6 +20,7 @@ type DataStore interface {
 	UpdateUsedBytes(agentID string) error
 	ListAgents(status string) ([]Agent, error)
 	UpdateAgentStatus(id, status string) error
+	CountAgentsByStatus(status string) (int, error)
 
 	// Backups
 	CreateBackup(b *Backup) error
@@ -28,6 +29,7 @@ type DataStore interface {
 	GetBackup(agentID, timestamp string) (*Backup, error)
 	DeleteBackup(agentID, timestamp string) (*Backup, error)
 	DeleteAllBackups(agentID string) ([]Backup, error)
+	UndeleteBackup(agentID, timestamp string) error
 }
 
 // ---------------------------------------------------------------------------
@@ -59,6 +61,7 @@ type Backup struct {
 	S3Key           string
 	ManifestS3Key   string
 	CreatedAt       time.Time
+	DeletedAt       *time.Time
 }
 
 // ---------------------------------------------------------------------------

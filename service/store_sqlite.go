@@ -77,6 +77,9 @@ func migrateSQLite(db *sql.DB) error {
 	// Migration: add status column to existing databases
 	_, _ = db.Exec(`ALTER TABLE agents ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`)
 
+	// Migration: add deleted_at column for soft-delete
+	_, _ = db.Exec(`ALTER TABLE backups ADD COLUMN deleted_at TEXT`)
+
 	return nil
 }
 
@@ -146,7 +149,7 @@ func (s *SQLiteStore) RotateAgentToken(agentID, newTokenHash string) error {
 func (s *SQLiteStore) UpdateUsedBytes(agentID string) error {
 	_, err := s.db.Exec(`
 		UPDATE agents SET used_bytes = (
-			SELECT COALESCE(SUM(encrypted_bytes), 0) FROM backups WHERE agent_id = ?
+			SELECT COALESCE(SUM(encrypted_bytes), 0) FROM backups WHERE agent_id = ? AND deleted_at IS NULL
 		) WHERE id = ?`, agentID, agentID)
 	return err
 }
@@ -186,6 +189,13 @@ func (s *SQLiteStore) ListAgents(status string) ([]Agent, error) {
 	return agents, rows.Err()
 }
 
+func (s *SQLiteStore) CountAgentsByStatus(status string) (int, error) {
+	row := s.db.QueryRow(`SELECT COUNT(*) FROM agents WHERE status = ?`, status)
+	var count int
+	err := row.Scan(&count)
+	return count, err
+}
+
 func (s *SQLiteStore) UpdateAgentStatus(id, status string) error {
 	res, err := s.db.Exec(`UPDATE agents SET status = ? WHERE id = ?`, status, id)
 	if err != nil {
@@ -223,7 +233,7 @@ func (s *SQLiteStore) ListBackups(agentID string, limit int) ([]Backup, error) {
 	rows, err := s.db.Query(`
 		SELECT agent_id, timestamp, encrypted_bytes, source_file_count,
 			encrypted_sha256, s3_key, manifest_s3_key, created_at
-		FROM backups WHERE agent_id = ?
+		FROM backups WHERE agent_id = ? AND deleted_at IS NULL
 		ORDER BY created_at DESC LIMIT ?`, agentID, limit)
 	if err != nil {
 		return nil, err
@@ -248,7 +258,7 @@ func (s *SQLiteStore) ListBackups(agentID string, limit int) ([]Backup, error) {
 func (s *SQLiteStore) CountBackups(agentID string) (int, int64, error) {
 	row := s.db.QueryRow(`
 		SELECT COUNT(*), COALESCE(SUM(encrypted_bytes), 0)
-		FROM backups WHERE agent_id = ?`, agentID)
+		FROM backups WHERE agent_id = ? AND deleted_at IS NULL`, agentID)
 	var count int
 	var totalBytes int64
 	err := row.Scan(&count, &totalBytes)
@@ -259,7 +269,7 @@ func (s *SQLiteStore) GetBackup(agentID, timestamp string) (*Backup, error) {
 	row := s.db.QueryRow(`
 		SELECT agent_id, timestamp, encrypted_bytes, source_file_count,
 			encrypted_sha256, s3_key, manifest_s3_key, created_at
-		FROM backups WHERE agent_id = ? AND timestamp = ?`, agentID, timestamp)
+		FROM backups WHERE agent_id = ? AND timestamp = ? AND deleted_at IS NULL`, agentID, timestamp)
 
 	b := &Backup{}
 	var createdAt string
@@ -281,7 +291,7 @@ func (s *SQLiteStore) DeleteBackup(agentID, timestamp string) (*Backup, error) {
 	if err != nil || b == nil {
 		return nil, err
 	}
-	_, err = s.db.Exec(`DELETE FROM backups WHERE agent_id = ? AND timestamp = ?`, agentID, timestamp)
+	_, err = s.db.Exec(`UPDATE backups SET deleted_at = datetime('now') WHERE agent_id = ? AND timestamp = ? AND deleted_at IS NULL`, agentID, timestamp)
 	if err != nil {
 		return nil, err
 	}
@@ -294,10 +304,23 @@ func (s *SQLiteStore) DeleteAllBackups(agentID string) ([]Backup, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, err = s.db.Exec(`DELETE FROM backups WHERE agent_id = ?`, agentID)
+	_, err = s.db.Exec(`UPDATE backups SET deleted_at = datetime('now') WHERE agent_id = ? AND deleted_at IS NULL`, agentID)
 	if err != nil {
 		return nil, err
 	}
 	_ = s.UpdateUsedBytes(agentID)
 	return backups, nil
+}
+
+func (s *SQLiteStore) UndeleteBackup(agentID, timestamp string) error {
+	res, err := s.db.Exec(`UPDATE backups SET deleted_at = NULL WHERE agent_id = ? AND timestamp = ? AND deleted_at IS NOT NULL`, agentID, timestamp)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("backup not found or not deleted")
+	}
+	_ = s.UpdateUsedBytes(agentID)
+	return nil
 }

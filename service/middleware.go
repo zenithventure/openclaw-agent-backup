@@ -20,24 +20,28 @@ func AgentFromContext(ctx context.Context) *Agent {
 	return a
 }
 
-// APIKeyAuth validates the X-API-Key header against the expected key.
-// If expectedKey is empty, the check is skipped (pass-through for local dev).
-func APIKeyAuth(expectedKey string, next http.Handler) http.Handler {
+// APIKeyAuth validates the X-API-Key header against one or more expected keys.
+// expectedKeys can be a single key or comma-separated list (for rotation).
+// If expectedKeys is empty, the check is skipped (pass-through for local dev).
+func APIKeyAuth(expectedKeys string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if expectedKey == "" {
+		if expectedKeys == "" {
 			next.ServeHTTP(w, r)
 			return
 		}
 
 		key := r.Header.Get("X-API-Key")
-		if key != expectedKey {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"error":"invalid or missing API key"}`))
-			return
+		for _, allowed := range strings.Split(expectedKeys, ",") {
+			allowed = strings.TrimSpace(allowed)
+			if allowed != "" && key == allowed {
+				next.ServeHTTP(w, r)
+				return
+			}
 		}
 
-		next.ServeHTTP(w, r)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"invalid or missing API key"}`))
 	})
 }
 

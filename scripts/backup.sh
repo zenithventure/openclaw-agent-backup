@@ -130,8 +130,8 @@ if [[ -f "$STATE_DIR/last-backup" ]]; then
                  || echo 0)
     NOW_EPOCH=$(date +%s)
     HOURS_AGO=$(( (NOW_EPOCH - LAST_EPOCH) / 3600 ))
-    if [[ $HOURS_AGO -lt 20 && "${FORCE_BACKUP:-}" != "1" ]]; then
-        ok "Last backup was ${HOURS_AGO}h ago (< 20h). Skipping. Set FORCE_BACKUP=1 to override."
+    if [[ $HOURS_AGO -lt 12 && "${FORCE_BACKUP:-}" != "1" ]]; then
+        ok "Last backup was ${HOURS_AGO}h ago (< 12h). Skipping. Set FORCE_BACKUP=1 to override."
         exit 0
     fi
 fi
@@ -299,10 +299,11 @@ MANIFEST_UPLOAD_URL=$(echo "$UPLOAD_RESPONSE" | jq -r '.urls["manifest.json"] //
 # ---------------------------------------------------------------------------
 info "Uploading encrypted backup ($(( ENCRYPTED_SIZE / 1048576 ))MB)..."
 
-# Upload backup blob
+# Upload backup blob (Content-Length must match the presigned URL)
 HTTP_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
     -X PUT \
     -H "Content-Type: application/octet-stream" \
+    -H "Content-Length: $ENCRYPTED_SIZE" \
     --data-binary "@$ENCRYPTED" \
     "$BACKUP_UPLOAD_URL") \
     || die "Failed to upload backup blob"

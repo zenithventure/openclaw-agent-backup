@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 )
 
 type Handlers struct {
@@ -47,6 +48,16 @@ func (h *Handlers) Register(w http.ResponseWriter, r *http.Request) {
 	if req.AgentName == "" {
 		jsonError(w, "agent_name is required", http.StatusBadRequest)
 		return
+	}
+
+	// Check pending agent cap
+	if h.config.MaxPendingAgents > 0 {
+		pendingCount, err := h.store.CountAgentsByStatus("pending")
+		if err == nil && pendingCount >= h.config.MaxPendingAgents {
+			jsonError(w, "registration temporarily unavailable, too many pending agents", http.StatusServiceUnavailable)
+			return
+		}
+		// Fail open on error — don't block registration if the count query fails
 	}
 
 	agentID, err := GenerateAgentID()
@@ -124,11 +135,41 @@ func (h *Handlers) UploadURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate upload size
+	if req.EncryptedBytes <= 0 {
+		jsonError(w, "encrypted_bytes must be positive", http.StatusBadRequest)
+		return
+	}
+	if h.config.MaxUploadBytes > 0 && req.EncryptedBytes > h.config.MaxUploadBytes {
+		jsonError(w, fmt.Sprintf("upload too large, max %d bytes", h.config.MaxUploadBytes), http.StatusBadRequest)
+		return
+	}
+
 	// Check quota
 	if agent.UsedBytes+req.EncryptedBytes > agent.QuotaBytes {
 		jsonError(w, fmt.Sprintf("quota exceeded: used %d + new %d > quota %d bytes",
 			agent.UsedBytes, req.EncryptedBytes, agent.QuotaBytes), http.StatusForbidden)
 		return
+	}
+
+	// Single upload can't exceed total quota
+	if req.EncryptedBytes > agent.QuotaBytes {
+		jsonError(w, "upload exceeds total quota", http.StatusForbidden)
+		return
+	}
+
+	// Backup frequency limit
+	if h.config.MinBackupIntervalHours > 0 {
+		backups, err := h.store.ListBackups(agent.ID, 1)
+		if err == nil && len(backups) > 0 {
+			since := time.Since(backups[0].CreatedAt)
+			minInterval := time.Duration(h.config.MinBackupIntervalHours) * time.Hour
+			if since < minInterval {
+				next := backups[0].CreatedAt.Add(minInterval)
+				jsonError(w, fmt.Sprintf("too soon, next backup allowed after %s", next.Format(time.RFC3339)), http.StatusTooManyRequests)
+				return
+			}
+		}
 	}
 
 	prefix := agent.ID + "/" + req.Timestamp + "/"
@@ -146,7 +187,14 @@ func (h *Handlers) UploadURL(w http.ResponseWriter, r *http.Request) {
 			contentType = "application/json"
 		}
 
-		url, err := h.s3.PresignPut(r.Context(), key, contentType)
+		var url string
+		var err error
+		if file == "backup.tar.gz.enc" {
+			// Use content-length-enforced presigned URL for the backup blob
+			url, err = h.s3.PresignPutWithLength(r.Context(), key, contentType, req.EncryptedBytes)
+		} else {
+			url, err = h.s3.PresignPut(r.Context(), key, contentType)
+		}
 		if err != nil {
 			log.Printf("ERROR: presign PUT %s: %v", key, err)
 			jsonError(w, "failed to generate upload URL", http.StatusInternalServerError)
@@ -173,6 +221,17 @@ func (h *Handlers) UploadURL(w http.ResponseWriter, r *http.Request) {
 		log.Printf("ERROR: create backup record: %v", err)
 		jsonError(w, "failed to record backup", http.StatusInternalServerError)
 		return
+	}
+
+	// Auto-rotate: soft-delete oldest backups if over limit
+	if h.config.MaxBackupsPerAgent > 0 {
+		allBackups, err := h.store.ListBackups(agent.ID, 0)
+		if err == nil && len(allBackups) > h.config.MaxBackupsPerAgent {
+			for _, old := range allBackups[h.config.MaxBackupsPerAgent:] {
+				h.store.DeleteBackup(agent.ID, old.Timestamp)
+			}
+			h.store.UpdateUsedBytes(agent.ID)
+		}
 	}
 
 	jsonResponse(w, http.StatusOK, UploadURLResponse{
@@ -363,9 +422,11 @@ func (h *Handlers) DeleteBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.s3.DeleteBackupObjects(r.Context(), backup)
-
-	jsonResponse(w, http.StatusOK, map[string]string{"deleted": timestamp})
+	canUndeleteUntil := time.Now().UTC().Add(time.Duration(h.config.DeleteGraceHours) * time.Hour)
+	jsonResponse(w, http.StatusOK, map[string]string{
+		"deleted":            timestamp,
+		"can_undelete_until": canUndeleteUntil.Format(time.RFC3339),
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -382,13 +443,28 @@ func (h *Handlers) DeleteAllBackups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for i := range backups {
-		h.s3.DeleteBackupObjects(r.Context(), &backups[i])
+	canUndeleteUntil := time.Now().UTC().Add(time.Duration(h.config.DeleteGraceHours) * time.Hour)
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"deleted_count":      len(backups),
+		"can_undelete_until": canUndeleteUntil.Format(time.RFC3339),
+	})
+}
+
+// ---------------------------------------------------------------------------
+// POST /v1/backups/{timestamp}/undelete
+// ---------------------------------------------------------------------------
+
+func (h *Handlers) UndeleteBackup(w http.ResponseWriter, r *http.Request) {
+	agent := AgentFromContext(r.Context())
+	timestamp := r.PathValue("timestamp")
+
+	err := h.store.UndeleteBackup(agent.ID, timestamp)
+	if err != nil {
+		jsonError(w, "backup not found or not deleted", http.StatusNotFound)
+		return
 	}
 
-	jsonResponse(w, http.StatusOK, map[string]interface{}{
-		"deleted_count": len(backups),
-	})
+	jsonResponse(w, http.StatusOK, map[string]string{"restored": timestamp})
 }
 
 // ---------------------------------------------------------------------------

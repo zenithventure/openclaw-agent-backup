@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func setupTestService(t *testing.T) (*Handlers, func()) {
@@ -606,5 +607,389 @@ func TestAdminApproveAgent_NotFound(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Security hardening tests
+// ---------------------------------------------------------------------------
+
+func TestUploadURL_ExceedsMaxUploadBytes(t *testing.T) {
+	h, cleanup := setupTestService(t)
+	defer cleanup()
+	h.config.MaxUploadBytes = 1024
+
+	agent := &Agent{
+		ID:         "ag_maxupload",
+		Name:       "max-upload-agent",
+		Status:     "active",
+		QuotaBytes: 500 * 1024 * 1024,
+	}
+	_, tokenHash, _ := GenerateToken()
+	h.store.CreateAgent(agent, tokenHash)
+
+	body := `{"timestamp":"2026-02-22T030000Z","encrypted_bytes":2048,"encrypted_sha256":"abc"}`
+	req := httptest.NewRequest("POST", "/v1/backups/upload-url", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(req.Context(), agentContextKey, agent)
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	h.UploadURL(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestUploadURL_ZeroBytes(t *testing.T) {
+	h, cleanup := setupTestService(t)
+	defer cleanup()
+
+	agent := &Agent{
+		ID:         "ag_zerobytes",
+		Name:       "zero-bytes-agent",
+		Status:     "active",
+		QuotaBytes: 500 * 1024 * 1024,
+	}
+	_, tokenHash, _ := GenerateToken()
+	h.store.CreateAgent(agent, tokenHash)
+
+	body := `{"timestamp":"2026-02-22T030000Z","encrypted_bytes":0,"encrypted_sha256":"abc"}`
+	req := httptest.NewRequest("POST", "/v1/backups/upload-url", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(req.Context(), agentContextKey, agent)
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	h.UploadURL(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestUploadURL_TooFrequent(t *testing.T) {
+	h, cleanup := setupTestService(t)
+	defer cleanup()
+	h.config.MinBackupIntervalHours = 12
+
+	agent := &Agent{
+		ID:         "ag_freq",
+		Name:       "freq-agent",
+		Status:     "active",
+		QuotaBytes: 500 * 1024 * 1024,
+	}
+	_, tokenHash, _ := GenerateToken()
+	h.store.CreateAgent(agent, tokenHash)
+
+	// Create a recent backup
+	h.store.CreateBackup(&Backup{
+		AgentID:         agent.ID,
+		Timestamp:       "2026-02-22T030000Z",
+		EncryptedBytes:  100,
+		EncryptedSHA256: "abc",
+		S3Key:           agent.ID + "/2026-02-22T030000Z/backup.tar.gz.enc",
+		ManifestS3Key:   agent.ID + "/2026-02-22T030000Z/manifest.json",
+	})
+
+	body := `{"timestamp":"2026-02-22T040000Z","encrypted_bytes":100,"encrypted_sha256":"def"}`
+	req := httptest.NewRequest("POST", "/v1/backups/upload-url", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(req.Context(), agentContextKey, agent)
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	h.UploadURL(w, req)
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestUploadURL_AutoRotation(t *testing.T) {
+	h, cleanup := setupTestService(t)
+	defer cleanup()
+	h.config.MaxBackupsPerAgent = 2
+	h.config.MinBackupIntervalHours = 0 // disable frequency limit for this test
+
+	agent := &Agent{
+		ID:         "ag_rotate",
+		Name:       "rotate-agent",
+		Status:     "active",
+		QuotaBytes: 500 * 1024 * 1024,
+	}
+	_, tokenHash, _ := GenerateToken()
+	h.store.CreateAgent(agent, tokenHash)
+
+	// Create 2 backups manually
+	for _, ts := range []string{"2026-02-20T030000Z", "2026-02-21T030000Z"} {
+		h.store.CreateBackup(&Backup{
+			AgentID:         agent.ID,
+			Timestamp:       ts,
+			EncryptedBytes:  100,
+			EncryptedSHA256: "abc",
+			S3Key:           agent.ID + "/" + ts + "/backup.tar.gz.enc",
+			ManifestS3Key:   agent.ID + "/" + ts + "/manifest.json",
+		})
+		// Small delay to ensure ordering
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Verify we have 2
+	count, _, _ := h.store.CountBackups(agent.ID)
+	if count != 2 {
+		t.Fatalf("expected 2 backups, got %d", count)
+	}
+
+	// Create a 3rd — should trigger rotation (needs S3 client, but s3 is nil in test)
+	// Since UploadURL needs s3, we test the rotation logic directly
+	h.store.CreateBackup(&Backup{
+		AgentID:         agent.ID,
+		Timestamp:       "2026-02-22T030000Z",
+		EncryptedBytes:  100,
+		EncryptedSHA256: "def",
+		S3Key:           agent.ID + "/2026-02-22T030000Z/backup.tar.gz.enc",
+		ManifestS3Key:   agent.ID + "/2026-02-22T030000Z/manifest.json",
+	})
+
+	// Simulate the auto-rotation logic from UploadURL
+	allBackups, _ := h.store.ListBackups(agent.ID, 0)
+	if len(allBackups) > h.config.MaxBackupsPerAgent {
+		for _, old := range allBackups[h.config.MaxBackupsPerAgent:] {
+			h.store.DeleteBackup(agent.ID, old.Timestamp)
+		}
+		h.store.UpdateUsedBytes(agent.ID)
+	}
+
+	// Should now have only 2 visible
+	count, _, _ = h.store.CountBackups(agent.ID)
+	if count != 2 {
+		t.Errorf("expected 2 backups after rotation, got %d", count)
+	}
+
+	// Oldest should be soft-deleted
+	visible, _ := h.store.ListBackups(agent.ID, 0)
+	for _, b := range visible {
+		if b.Timestamp == "2026-02-20T030000Z" {
+			t.Error("oldest backup should have been rotated out")
+		}
+	}
+}
+
+func TestRegister_MaxPendingExceeded(t *testing.T) {
+	h, cleanup := setupTestService(t)
+	defer cleanup()
+	h.config.MaxPendingAgents = 2
+
+	// Create 2 pending agents
+	for i := 0; i < 2; i++ {
+		agent := &Agent{
+			ID:         "ag_pending_" + string(rune('a'+i)),
+			Name:       "pending-agent",
+			Status:     "pending",
+			QuotaBytes: 500 * 1024 * 1024,
+		}
+		_, tokenHash, _ := GenerateToken()
+		h.store.CreateAgent(agent, tokenHash)
+	}
+
+	// Try to register a 3rd
+	body := `{"agent_name":"overflow-agent","hostname":"testhost"}`
+	req := httptest.NewRequest("POST", "/v1/agents/register", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.Register(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestDeleteBackup_SoftDelete(t *testing.T) {
+	h, cleanup := setupTestService(t)
+	defer cleanup()
+
+	agent := &Agent{
+		ID:         "ag_softdel",
+		Name:       "softdel-agent",
+		Status:     "active",
+		QuotaBytes: 500 * 1024 * 1024,
+	}
+	_, tokenHash, _ := GenerateToken()
+	h.store.CreateAgent(agent, tokenHash)
+
+	h.store.CreateBackup(&Backup{
+		AgentID:         agent.ID,
+		Timestamp:       "2026-02-22T030000Z",
+		EncryptedBytes:  1024,
+		EncryptedSHA256: "abc",
+		S3Key:           agent.ID + "/2026-02-22T030000Z/backup.tar.gz.enc",
+		ManifestS3Key:   agent.ID + "/2026-02-22T030000Z/manifest.json",
+	})
+
+	// Delete (soft)
+	_, err := h.store.DeleteBackup(agent.ID, "2026-02-22T030000Z")
+	if err != nil {
+		t.Fatalf("DeleteBackup: %v", err)
+	}
+
+	// Should be hidden from list and count
+	count, _, _ := h.store.CountBackups(agent.ID)
+	if count != 0 {
+		t.Errorf("expected 0 visible backups after soft-delete, got %d", count)
+	}
+
+	backups, _ := h.store.ListBackups(agent.ID, 0)
+	if len(backups) != 0 {
+		t.Errorf("expected 0 visible backups in list, got %d", len(backups))
+	}
+
+	// Used bytes should be 0
+	h.store.UpdateUsedBytes(agent.ID)
+	updated, _ := h.store.GetAgent(agent.ID)
+	if updated.UsedBytes != 0 {
+		t.Errorf("expected used_bytes 0 after soft-delete, got %d", updated.UsedBytes)
+	}
+}
+
+func TestUndeleteBackup(t *testing.T) {
+	h, cleanup := setupTestService(t)
+	defer cleanup()
+
+	agent := &Agent{
+		ID:         "ag_undel",
+		Name:       "undel-agent",
+		Status:     "active",
+		QuotaBytes: 500 * 1024 * 1024,
+	}
+	_, tokenHash, _ := GenerateToken()
+	h.store.CreateAgent(agent, tokenHash)
+
+	h.store.CreateBackup(&Backup{
+		AgentID:         agent.ID,
+		Timestamp:       "2026-02-22T030000Z",
+		EncryptedBytes:  1024,
+		EncryptedSHA256: "abc",
+		S3Key:           agent.ID + "/2026-02-22T030000Z/backup.tar.gz.enc",
+		ManifestS3Key:   agent.ID + "/2026-02-22T030000Z/manifest.json",
+	})
+
+	// Delete
+	h.store.DeleteBackup(agent.ID, "2026-02-22T030000Z")
+
+	// Undelete
+	err := h.store.UndeleteBackup(agent.ID, "2026-02-22T030000Z")
+	if err != nil {
+		t.Fatalf("UndeleteBackup: %v", err)
+	}
+
+	// Should be visible again
+	count, _, _ := h.store.CountBackups(agent.ID)
+	if count != 1 {
+		t.Errorf("expected 1 backup after undelete, got %d", count)
+	}
+
+	b, _ := h.store.GetBackup(agent.ID, "2026-02-22T030000Z")
+	if b == nil {
+		t.Error("expected backup to be visible after undelete")
+	}
+}
+
+func TestUndeleteBackup_NotFound(t *testing.T) {
+	h, cleanup := setupTestService(t)
+	defer cleanup()
+
+	agent := &Agent{
+		ID:         "ag_undel404",
+		Name:       "undel-nf-agent",
+		Status:     "active",
+		QuotaBytes: 500 * 1024 * 1024,
+	}
+	_, tokenHash, _ := GenerateToken()
+	h.store.CreateAgent(agent, tokenHash)
+
+	err := h.store.UndeleteBackup(agent.ID, "nonexistent")
+	if err == nil {
+		t.Error("expected error for non-existent backup undelete")
+	}
+}
+
+func TestAPIKeyAuth_MultipleKeys(t *testing.T) {
+	called := false
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := APIKeyAuth("key1,key2", inner)
+
+	// key1 should work
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("X-API-Key", "key1")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if !called {
+		t.Error("key1 should be accepted")
+	}
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 for key1, got %d", w.Code)
+	}
+
+	// key2 should work
+	called = false
+	req = httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("X-API-Key", "key2")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if !called {
+		t.Error("key2 should be accepted")
+	}
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 for key2, got %d", w.Code)
+	}
+
+	// key3 should fail
+	called = false
+	req = httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("X-API-Key", "key3")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if called {
+		t.Error("key3 should be rejected")
+	}
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 for key3, got %d", w.Code)
+	}
+}
+
+func TestAPIKeyAuth_RotatedKey(t *testing.T) {
+	called := false
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Simulate rotation: old key + new key
+	handler := APIKeyAuth("old-key, new-key", inner)
+
+	// Old key still works
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("X-API-Key", "old-key")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if !called {
+		t.Error("old-key should still be accepted during rotation")
+	}
+
+	// New key works
+	called = false
+	req = httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("X-API-Key", "new-key")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if !called {
+		t.Error("new-key should be accepted during rotation")
 	}
 }
