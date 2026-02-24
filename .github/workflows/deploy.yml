@@ -38,11 +38,9 @@ jobs:
   # ==========================================================================
   # Build & Test — Runs on every push
   # ==========================================================================
-  build:
+  build-and-test:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    outputs:
-      artifact_name: ${{ steps.meta.outputs.artifact_name }}
     steps:
       - uses: actions/checkout@v4
 
@@ -55,40 +53,25 @@ jobs:
         working-directory: service
         run: go test -v ./...
 
-      - name: SAM build
-        working-directory: service
-        run: sam build
-
-      - name: Generate artifact name
-        id: meta
-        run: |
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            echo "artifact_name=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-          else
-            echo "artifact_name=main-${{ github.sha }}" >> $GITHUB_OUTPUT
-          fi
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sam-build-${{ steps.meta.outputs.artifact_name }}
-          path: service/.aws-sam/
-          retention-days: 30
-
   # ==========================================================================
   # Deploy to Dev — Automatic on push to main
   # ==========================================================================
   deploy-dev:
-    needs: build
+    needs: build-and-test
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: dev
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/setup-go@v5
         with:
-          name: sam-build-${{ needs.build.outputs.artifact_name }}
-          path: service/.aws-sam/
+          go-version: '1.22'
+          cache-dependency-path: service/go.sum
+
+      - name: SAM build
+        working-directory: service
+        run: sam build
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
