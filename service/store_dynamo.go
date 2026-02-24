@@ -34,6 +34,7 @@ type dynamoAgent struct {
 	EncryptTool     string `dynamodbav:"encrypt_tool"`
 	PublicKey       string `dynamodbav:"public_key"`
 	TokenHash       string `dynamodbav:"token_hash"`
+	Status          string `dynamodbav:"status"`
 	QuotaBytes      int64  `dynamodbav:"quota_bytes"`
 	UsedBytes       int64  `dynamodbav:"used_bytes"`
 	CreatedAt       string `dynamodbav:"created_at"`
@@ -98,6 +99,7 @@ func (s *DynamoStore) CreateAgent(a *Agent, tokenHash string) error {
 		EncryptTool:     a.EncryptTool,
 		PublicKey:        a.PublicKey,
 		TokenHash:       tokenHash,
+		Status:          a.Status,
 		QuotaBytes:      a.QuotaBytes,
 		UsedBytes:       0,
 		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
@@ -185,6 +187,55 @@ func (s *DynamoStore) UpdateUsedBytes(agentID string) error {
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":ub": &types.AttributeValueMemberN{Value: strconv.FormatInt(totalBytes, 10)},
 		},
+	})
+	return err
+}
+
+func (s *DynamoStore) ListAgents(status string) ([]Agent, error) {
+	input := &dynamodb.ScanInput{
+		TableName: aws.String(s.agentsTable),
+	}
+
+	if status != "" {
+		input.FilterExpression = aws.String("#s = :s")
+		input.ExpressionAttributeNames = map[string]string{
+			"#s": "status",
+		}
+		input.ExpressionAttributeValues = map[string]types.AttributeValue{
+			":s": &types.AttributeValueMemberS{Value: status},
+		}
+	}
+
+	out, err := s.client.Scan(context.Background(), input)
+	if err != nil {
+		return nil, fmt.Errorf("scan agents: %w", err)
+	}
+
+	agents := make([]Agent, 0, len(out.Items))
+	for _, item := range out.Items {
+		a, err := unmarshalAgent(item)
+		if err != nil {
+			return nil, err
+		}
+		agents = append(agents, *a)
+	}
+	return agents, nil
+}
+
+func (s *DynamoStore) UpdateAgentStatus(id, status string) error {
+	_, err := s.client.UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(s.agentsTable),
+		Key: map[string]types.AttributeValue{
+			"id": &types.AttributeValueMemberS{Value: id},
+		},
+		UpdateExpression: aws.String("SET #s = :s"),
+		ExpressionAttributeNames: map[string]string{
+			"#s": "status",
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":s": &types.AttributeValueMemberS{Value: status},
+		},
+		ConditionExpression: aws.String("attribute_exists(id)"),
 	})
 	return err
 }
@@ -354,6 +405,12 @@ func unmarshalAgent(item map[string]types.AttributeValue) (*Agent, error) {
 
 	createdAt, _ := time.Parse(time.RFC3339, da.CreatedAt)
 
+	// Backwards compat: treat empty/missing status as "active"
+	status := da.Status
+	if status == "" {
+		status = "active"
+	}
+
 	return &Agent{
 		ID:              da.ID,
 		Name:            da.Name,
@@ -364,6 +421,7 @@ func unmarshalAgent(item map[string]types.AttributeValue) (*Agent, error) {
 		Fingerprint:     da.Fingerprint,
 		EncryptTool:     da.EncryptTool,
 		PublicKey:        da.PublicKey,
+		Status:          status,
 		QuotaBytes:      da.QuotaBytes,
 		UsedBytes:       da.UsedBytes,
 		CreatedAt:       createdAt,

@@ -83,20 +83,27 @@ func buildHandler(store DataStore, s3client *S3Client, cfg *Config) http.Handler
 
 	mux := http.NewServeMux()
 
-	// Public (rate-limited)
+	// Public (rate-limited, open registration)
 	mux.Handle("POST /v1/agents/register", RateLimit(cfg.RegisterRateLimit, http.HandlerFunc(h.Register)))
 
-	// Authenticated
-	mux.Handle("POST /v1/backups/upload-url", Auth(store, http.HandlerFunc(h.UploadURL)))
+	// Authenticated + RequireActive (mutation endpoints)
+	mux.Handle("POST /v1/backups/upload-url", Auth(store, RequireActive(http.HandlerFunc(h.UploadURL))))
+	mux.Handle("DELETE /v1/backups", Auth(store, RequireActive(http.HandlerFunc(h.DeleteAllBackups))))
+	mux.Handle("DELETE /v1/backups/{timestamp}", Auth(store, RequireActive(http.HandlerFunc(h.DeleteBackup))))
+
+	// Authenticated (read endpoints — pending/suspended agents can still use these)
 	mux.Handle("GET /v1/backups", Auth(store, http.HandlerFunc(h.ListBackups)))
 	mux.Handle("GET /v1/backups/{timestamp}", Auth(store, http.HandlerFunc(h.GetBackup)))
 	mux.Handle("POST /v1/backups/download-url", Auth(store, http.HandlerFunc(h.DownloadURL)))
-	mux.Handle("DELETE /v1/backups", Auth(store, http.HandlerFunc(h.DeleteAllBackups)))
-	mux.Handle("DELETE /v1/backups/{timestamp}", Auth(store, http.HandlerFunc(h.DeleteBackup)))
 
-	// Agent management
+	// Agent management (auth-only, no active requirement)
 	mux.Handle("GET /v1/agents/me", Auth(store, http.HandlerFunc(h.AgentInfo)))
 	mux.Handle("POST /v1/agents/me/rotate-token", Auth(store, http.HandlerFunc(h.RotateToken)))
+
+	// Admin endpoints (protected by X-API-Key header)
+	mux.Handle("GET /v1/admin/agents", APIKeyAuth(cfg.AdminAPIKey, http.HandlerFunc(h.AdminListAgents)))
+	mux.Handle("POST /v1/admin/agents/{id}/approve", APIKeyAuth(cfg.AdminAPIKey, http.HandlerFunc(h.AdminApproveAgent)))
+	mux.Handle("POST /v1/admin/agents/{id}/suspend", APIKeyAuth(cfg.AdminAPIKey, http.HandlerFunc(h.AdminSuspendAgent)))
 
 	// Health
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {

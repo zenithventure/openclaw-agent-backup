@@ -49,6 +49,7 @@ func migrateSQLite(db *sql.DB) error {
 			encrypt_tool     TEXT NOT NULL DEFAULT 'age',
 			public_key       TEXT NOT NULL DEFAULT '',
 			token_hash       TEXT NOT NULL,
+			status           TEXT NOT NULL DEFAULT 'active',
 			quota_bytes      INTEGER NOT NULL DEFAULT 524288000,
 			used_bytes       INTEGER NOT NULL DEFAULT 0,
 			created_at       TEXT NOT NULL DEFAULT (datetime('now'))
@@ -69,7 +70,14 @@ func migrateSQLite(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_backups_agent_created
 			ON backups(agent_id, created_at);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Migration: add status column to existing databases
+	_, _ = db.Exec(`ALTER TABLE agents ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`)
+
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -79,10 +87,10 @@ func migrateSQLite(db *sql.DB) error {
 func (s *SQLiteStore) CreateAgent(a *Agent, tokenHash string) error {
 	_, err := s.db.Exec(`
 		INSERT INTO agents (id, name, hostname, os, arch, openclaw_version,
-			fingerprint, encrypt_tool, public_key, token_hash, quota_bytes)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			fingerprint, encrypt_tool, public_key, token_hash, status, quota_bytes)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		a.ID, a.Name, a.Hostname, a.OS, a.Arch, a.OpenClawVersion,
-		a.Fingerprint, a.EncryptTool, a.PublicKey, tokenHash, a.QuotaBytes,
+		a.Fingerprint, a.EncryptTool, a.PublicKey, tokenHash, a.Status, a.QuotaBytes,
 	)
 	return err
 }
@@ -91,14 +99,14 @@ func (s *SQLiteStore) LookupAgentByToken(token string) (*Agent, error) {
 	h := HashToken(token)
 	row := s.db.QueryRow(`
 		SELECT id, name, hostname, os, arch, openclaw_version,
-			fingerprint, encrypt_tool, public_key, quota_bytes, used_bytes, created_at
+			fingerprint, encrypt_tool, public_key, status, quota_bytes, used_bytes, created_at
 		FROM agents WHERE token_hash = ?`, h)
 
 	a := &Agent{}
 	var createdAt string
 	err := row.Scan(&a.ID, &a.Name, &a.Hostname, &a.OS, &a.Arch,
 		&a.OpenClawVersion, &a.Fingerprint, &a.EncryptTool, &a.PublicKey,
-		&a.QuotaBytes, &a.UsedBytes, &createdAt)
+		&a.Status, &a.QuotaBytes, &a.UsedBytes, &createdAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -112,14 +120,14 @@ func (s *SQLiteStore) LookupAgentByToken(token string) (*Agent, error) {
 func (s *SQLiteStore) GetAgent(id string) (*Agent, error) {
 	row := s.db.QueryRow(`
 		SELECT id, name, hostname, os, arch, openclaw_version,
-			fingerprint, encrypt_tool, public_key, quota_bytes, used_bytes, created_at
+			fingerprint, encrypt_tool, public_key, status, quota_bytes, used_bytes, created_at
 		FROM agents WHERE id = ?`, id)
 
 	a := &Agent{}
 	var createdAt string
 	err := row.Scan(&a.ID, &a.Name, &a.Hostname, &a.OS, &a.Arch,
 		&a.OpenClawVersion, &a.Fingerprint, &a.EncryptTool, &a.PublicKey,
-		&a.QuotaBytes, &a.UsedBytes, &createdAt)
+		&a.Status, &a.QuotaBytes, &a.UsedBytes, &createdAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -141,6 +149,53 @@ func (s *SQLiteStore) UpdateUsedBytes(agentID string) error {
 			SELECT COALESCE(SUM(encrypted_bytes), 0) FROM backups WHERE agent_id = ?
 		) WHERE id = ?`, agentID, agentID)
 	return err
+}
+
+func (s *SQLiteStore) ListAgents(status string) ([]Agent, error) {
+	var rows *sql.Rows
+	var err error
+
+	if status != "" {
+		rows, err = s.db.Query(`
+			SELECT id, name, hostname, os, arch, openclaw_version,
+				fingerprint, encrypt_tool, public_key, status, quota_bytes, used_bytes, created_at
+			FROM agents WHERE status = ? ORDER BY created_at DESC`, status)
+	} else {
+		rows, err = s.db.Query(`
+			SELECT id, name, hostname, os, arch, openclaw_version,
+				fingerprint, encrypt_tool, public_key, status, quota_bytes, used_bytes, created_at
+			FROM agents ORDER BY created_at DESC`)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var agents []Agent
+	for rows.Next() {
+		var a Agent
+		var createdAt string
+		if err := rows.Scan(&a.ID, &a.Name, &a.Hostname, &a.OS, &a.Arch,
+			&a.OpenClawVersion, &a.Fingerprint, &a.EncryptTool, &a.PublicKey,
+			&a.Status, &a.QuotaBytes, &a.UsedBytes, &createdAt); err != nil {
+			return nil, err
+		}
+		a.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
+		agents = append(agents, a)
+	}
+	return agents, rows.Err()
+}
+
+func (s *SQLiteStore) UpdateAgentStatus(id, status string) error {
+	res, err := s.db.Exec(`UPDATE agents SET status = ? WHERE id = ?`, status, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("agent not found: %s", id)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

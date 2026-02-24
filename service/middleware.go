@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -17,6 +18,46 @@ const agentContextKey contextKey = "agent"
 func AgentFromContext(ctx context.Context) *Agent {
 	a, _ := ctx.Value(agentContextKey).(*Agent)
 	return a
+}
+
+// APIKeyAuth validates the X-API-Key header against the expected key.
+// If expectedKey is empty, the check is skipped (pass-through for local dev).
+func APIKeyAuth(expectedKey string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if expectedKey == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		key := r.Header.Get("X-API-Key")
+		if key != expectedKey {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"error":"invalid or missing API key"}`))
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// RequireActive rejects requests from agents that are not in "active" status.
+// Must be placed after Auth middleware which sets the agent in context.
+func RequireActive(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		agent := AgentFromContext(r.Context())
+		if agent == nil {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		if agent.Status != "active" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprintf(w, `{"error":"agent not active","status":%q}`, agent.Status)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Auth validates the bearer token and injects the agent into the context.

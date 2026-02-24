@@ -8,6 +8,7 @@
 set -euo pipefail
 
 BASE_URL="${1:-http://localhost:8080}"
+ADMIN_KEY="${ADMIN_API_KEY:-}"
 PASS=0
 FAIL=0
 
@@ -40,7 +41,6 @@ assert_json() {
 }
 
 # Portable curl wrapper: sets RESP_BODY and RESP_STATUS
-# Usage: api_call RESP_BODY RESP_STATUS curl_args...
 _RESP_FILE=$(mktemp)
 trap "rm -f $_RESP_FILE" EXIT
 
@@ -49,6 +49,15 @@ do_curl() {
     status=$(curl -s -o "$_RESP_FILE" -w "%{http_code}" "$@")
     RESP_BODY=$(cat "$_RESP_FILE")
     RESP_STATUS="$status"
+}
+
+# Admin curl wrapper: adds X-API-Key header if ADMIN_KEY is set
+do_admin_curl() {
+    if [[ -n "$ADMIN_KEY" ]]; then
+        do_curl -H "X-API-Key: $ADMIN_KEY" "$@"
+    else
+        do_curl "$@"
+    fi
 }
 
 # -----------------------------------------------------------------------
@@ -64,7 +73,7 @@ do_curl "$BASE_URL/healthz"
 assert_status "GET /healthz" "200" "$RESP_STATUS"
 
 # -----------------------------------------------------------------------
-# 2. Register agent
+# 2. Register agent (open registration — no API key needed)
 # -----------------------------------------------------------------------
 info "2. Register agent"
 do_curl -X POST \
@@ -79,6 +88,7 @@ TOKEN=$(echo "$RESP_BODY" | jq -r '.token')
 
 assert_json "agent_id starts with ag_" '.agent_id | startswith("ag_")' "true" "$RESP_BODY"
 assert_json "token starts with ocb_" '.token | startswith("ocb_")' "true" "$RESP_BODY"
+assert_json "status = pending" '.status' "pending" "$RESP_BODY"
 assert_json "quota_mb = 500" '.quota_mb' "500" "$RESP_BODY"
 
 info "  Agent ID: $AGENT_ID"
@@ -95,14 +105,14 @@ do_curl -X POST \
 assert_status "POST /v1/agents/register (no name)" "400" "$RESP_STATUS"
 
 # -----------------------------------------------------------------------
-# 4. Agent info
+# 4. Agent info (pending agent can still check status)
 # -----------------------------------------------------------------------
-info "4. Get agent info"
+info "4. Get agent info (pending agent)"
 do_curl -H "Authorization: Bearer $TOKEN" "$BASE_URL/v1/agents/me"
 
 assert_status "GET /v1/agents/me" "200" "$RESP_STATUS"
 assert_json "name = test-agent" '.name' "test-agent" "$RESP_BODY"
-assert_json "hostname = test-host" '.hostname' "test-host" "$RESP_BODY"
+assert_json "status = pending" '.status' "pending" "$RESP_BODY"
 
 # -----------------------------------------------------------------------
 # 5. Auth with bad token
@@ -112,18 +122,44 @@ do_curl -H "Authorization: Bearer ocb_invalid" "$BASE_URL/v1/agents/me"
 assert_status "GET /v1/agents/me (bad token)" "401" "$RESP_STATUS"
 
 # -----------------------------------------------------------------------
-# 6. List backups (should be empty)
+# 6. Pending agent tries upload-url (should get 403)
 # -----------------------------------------------------------------------
-info "6. List backups (empty)"
+info "6. Pending agent tries upload-url"
+do_curl -X POST \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"timestamp":"2026-02-22T030000Z","files":["backup.tar.gz.enc","manifest.json"],"encrypted_bytes":1024,"encrypted_sha256":"deadbeef"}' \
+    "$BASE_URL/v1/backups/upload-url"
+
+assert_status "POST /v1/backups/upload-url (pending)" "403" "$RESP_STATUS"
+assert_json "error = agent not active" '.error' "agent not active" "$RESP_BODY"
+
+# -----------------------------------------------------------------------
+# 7. Admin approves agent
+# -----------------------------------------------------------------------
+info "7. Admin approves agent"
+do_admin_curl -X POST "$BASE_URL/v1/admin/agents/$AGENT_ID/approve"
+
+assert_status "POST /v1/admin/agents/{id}/approve" "200" "$RESP_STATUS"
+assert_json "status = active" '.status' "active" "$RESP_BODY"
+
+# Verify agent is now active
+do_curl -H "Authorization: Bearer $TOKEN" "$BASE_URL/v1/agents/me"
+assert_json "agent status = active" '.status' "active" "$RESP_BODY"
+
+# -----------------------------------------------------------------------
+# 8. List backups (should be empty)
+# -----------------------------------------------------------------------
+info "8. List backups (empty)"
 do_curl -H "Authorization: Bearer $TOKEN" "$BASE_URL/v1/backups"
 
 assert_status "GET /v1/backups" "200" "$RESP_STATUS"
 assert_json "count = 0" '.count' "0" "$RESP_BODY"
 
 # -----------------------------------------------------------------------
-# 7. Request upload URLs
+# 9. Request upload URLs (now active)
 # -----------------------------------------------------------------------
-info "7. Request upload URLs"
+info "9. Request upload URLs"
 do_curl -X POST \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
@@ -138,9 +174,9 @@ BACKUP_PUT_URL=$(echo "$RESP_BODY" | jq -r '.urls["backup.tar.gz.enc"]')
 MANIFEST_PUT_URL=$(echo "$RESP_BODY" | jq -r '.urls["manifest.json"]')
 
 # -----------------------------------------------------------------------
-# 8. Upload a fake encrypted backup via presigned URL
+# 10. Upload a fake encrypted backup via presigned URL
 # -----------------------------------------------------------------------
-info "8. Upload via presigned URLs"
+info "10. Upload via presigned URLs"
 
 echo "fake-encrypted-backup-data" > /tmp/test-backup.enc
 
@@ -161,27 +197,27 @@ assert_status "PUT manifest.json to S3" "200" "$RESP_STATUS"
 rm -f /tmp/test-backup.enc /tmp/test-manifest.json
 
 # -----------------------------------------------------------------------
-# 9. List backups (should show 1)
+# 11. List backups (should show 1)
 # -----------------------------------------------------------------------
-info "9. List backups (should show 1)"
+info "11. List backups (should show 1)"
 do_curl -H "Authorization: Bearer $TOKEN" "$BASE_URL/v1/backups"
 
 assert_status "GET /v1/backups" "200" "$RESP_STATUS"
 assert_json "count = 1" '.count' "1" "$RESP_BODY"
 
 # -----------------------------------------------------------------------
-# 10. Get specific backup
+# 12. Get specific backup
 # -----------------------------------------------------------------------
-info "10. Get specific backup"
+info "12. Get specific backup"
 do_curl -H "Authorization: Bearer $TOKEN" "$BASE_URL/v1/backups/2026-02-22T030000Z"
 
 assert_status "GET /v1/backups/{timestamp}" "200" "$RESP_STATUS"
 assert_json "timestamp matches" '.timestamp' "2026-02-22T030000Z" "$RESP_BODY"
 
 # -----------------------------------------------------------------------
-# 11. Request download URLs
+# 13. Request download URLs
 # -----------------------------------------------------------------------
-info "11. Request download URLs"
+info "13. Request download URLs"
 do_curl -X POST \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
@@ -203,16 +239,16 @@ else
 fi
 
 # -----------------------------------------------------------------------
-# 12. Get non-existent backup
+# 14. Get non-existent backup
 # -----------------------------------------------------------------------
-info "12. Get non-existent backup"
+info "14. Get non-existent backup"
 do_curl -H "Authorization: Bearer $TOKEN" "$BASE_URL/v1/backups/1999-01-01T000000Z"
 assert_status "GET /v1/backups/{nonexistent}" "404" "$RESP_STATUS"
 
 # -----------------------------------------------------------------------
-# 13. Rotate token
+# 15. Rotate token
 # -----------------------------------------------------------------------
-info "13. Rotate token"
+info "15. Rotate token"
 do_curl -X POST -H "Authorization: Bearer $TOKEN" "$BASE_URL/v1/agents/me/rotate-token"
 
 assert_status "POST /v1/agents/me/rotate-token" "200" "$RESP_STATUS"
@@ -231,9 +267,40 @@ assert_status "new token accepted" "200" "$RESP_STATUS"
 TOKEN="$NEW_TOKEN"
 
 # -----------------------------------------------------------------------
-# 14. Delete specific backup
+# 16. Admin list agents
 # -----------------------------------------------------------------------
-info "14. Delete backup"
+info "16. Admin list agents"
+do_admin_curl "$BASE_URL/v1/admin/agents"
+assert_status "GET /v1/admin/agents" "200" "$RESP_STATUS"
+assert_json "at least 1 agent" '. | length > 0' "true" "$RESP_BODY"
+
+# Filter by status
+do_admin_curl "$BASE_URL/v1/admin/agents?status=active"
+assert_status "GET /v1/admin/agents?status=active" "200" "$RESP_STATUS"
+
+# -----------------------------------------------------------------------
+# 17. Admin suspend agent
+# -----------------------------------------------------------------------
+info "17. Admin suspend agent"
+do_admin_curl -X POST "$BASE_URL/v1/admin/agents/$AGENT_ID/suspend"
+assert_status "POST /v1/admin/agents/{id}/suspend" "200" "$RESP_STATUS"
+
+# Suspended agent should be rejected on upload
+do_curl -X POST \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"timestamp":"2026-02-23T030000Z","files":["backup.tar.gz.enc","manifest.json"],"encrypted_bytes":1024,"encrypted_sha256":"deadbeef"}' \
+    "$BASE_URL/v1/backups/upload-url"
+assert_status "POST /v1/backups/upload-url (suspended)" "403" "$RESP_STATUS"
+
+# Re-approve for cleanup
+do_admin_curl -X POST "$BASE_URL/v1/admin/agents/$AGENT_ID/approve"
+assert_status "POST re-approve" "200" "$RESP_STATUS"
+
+# -----------------------------------------------------------------------
+# 18. Delete specific backup
+# -----------------------------------------------------------------------
+info "18. Delete backup"
 do_curl -X DELETE -H "Authorization: Bearer $TOKEN" "$BASE_URL/v1/backups/2026-02-22T030000Z"
 assert_status "DELETE /v1/backups/{timestamp}" "200" "$RESP_STATUS"
 

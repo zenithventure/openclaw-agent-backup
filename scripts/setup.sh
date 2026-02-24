@@ -15,7 +15,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPENCLAW_DIR="${OPENCLAW_DIR:-$HOME/.openclaw}"
 STATE_DIR="$OPENCLAW_DIR/skills/backup/.state"
-BACKUP_SERVICE_URL="${OPENCLAW_BACKUP_URL:-https://backup.openclaw.ai}"
+BACKUP_SERVICE_URL="${OPENCLAW_BACKUP_URL:-https://6j95borao8.execute-api.us-east-1.amazonaws.com}"
 SCHEDULE_HOUR="${OPENCLAW_BACKUP_HOUR:-3}"
 LABEL="ai.openclaw.backup"
 
@@ -81,16 +81,15 @@ else
     info "Generating master encryption key..."
 
     if [[ "$ENCRYPT_TOOL" == "age" ]]; then
-        age-keygen 2>"$STATE_DIR/master.key.pub" | head -n 2 > "$STATE_DIR/master.key"
+        # age-keygen writes the full key (comments + secret) to stdout,
+        # and "Public key: age1..." to stderr.
+        age-keygen -o "$STATE_DIR/master.key" 2>"$STATE_DIR/master.key.pub"
         chmod 600 "$STATE_DIR/master.key"
         chmod 600 "$STATE_DIR/master.key.pub"
 
-        # Extract the public key (recipient) for display and registration
-        AGE_RECIPIENT=$(grep '^age1' "$STATE_DIR/master.key.pub" || grep 'public key:' "$STATE_DIR/master.key.pub" | awk '{print $NF}')
-        if [[ -z "$AGE_RECIPIENT" ]]; then
-            # age-keygen outputs the public key as a comment in the secret key file
-            AGE_RECIPIENT=$(grep '^# public key:' "$STATE_DIR/master.key" | awk '{print $NF}')
-        fi
+        # Extract the public key (recipient) from the key file comment
+        AGE_RECIPIENT=$(grep -oE 'age1[a-z0-9]+' "$STATE_DIR/master.key")
+        [[ -n "$AGE_RECIPIENT" ]] || die "Failed to extract age recipient from master key"
         echo "$AGE_RECIPIENT" > "$STATE_DIR/recipient.txt"
     else
         # openssl: generate a random 256-bit key
@@ -118,6 +117,15 @@ else
     echo "  If this key is lost, your backups are UNRECOVERABLE."
     echo "  Copy the key file to a secure offline location now."
     echo "============================================================"
+    echo ""
+
+    # Emit structured recovery info for agent parsing
+    RECOVERY_JSON=$(jq -cn \
+        --arg key_path "$STATE_DIR/master.key" \
+        --arg public_key "$(cat "$STATE_DIR/recipient.txt" 2>/dev/null || echo '')" \
+        --arg encryption_tool "$ENCRYPT_TOOL" \
+        '{recovery_key_path: $key_path, public_key: $public_key, encryption_tool: $encryption_tool}')
+    echo "[OPENCLAW_RECOVERY_INFO]${RECOVERY_JSON}"
     echo ""
 fi
 
@@ -172,8 +180,7 @@ else
             public_key: $public_key
         }')
 
-    REGISTER_RESPONSE=$(curl -sf \
-        -X POST \
+    REGISTER_RESPONSE=$(curl -sf -X POST \
         -H "Content-Type: application/json" \
         -d "$REGISTER_PAYLOAD" \
         "$BACKUP_SERVICE_URL/v1/agents/register" 2>&1) \
@@ -182,6 +189,7 @@ else
     # Parse response
     AGENT_ID=$(echo "$REGISTER_RESPONSE" | jq -r '.agent_id // empty')
     AGENT_TOKEN=$(echo "$REGISTER_RESPONSE" | jq -r '.token // empty')
+    AGENT_STATUS=$(echo "$REGISTER_RESPONSE" | jq -r '.status // "active"')
     QUOTA_MB=$(echo "$REGISTER_RESPONSE" | jq -r '.quota_mb // "500"')
 
     [[ -n "$AGENT_ID" ]]    || die "Registration response missing agent_id"
@@ -191,8 +199,9 @@ else
     chmod 600 "$STATE_DIR/agent.token"
 
     echo "$AGENT_ID" > "$STATE_DIR/agent.id"
+    echo "$AGENT_STATUS" > "$STATE_DIR/agent.status"
 
-    ok "Registered as $AGENT_ID (quota: ${QUOTA_MB}MB)"
+    ok "Registered as $AGENT_ID (quota: ${QUOTA_MB}MB, status: $AGENT_STATUS)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -302,14 +311,24 @@ TIMER
 esac
 
 # ---------------------------------------------------------------------------
-# Run first backup
+# Run first backup (skip if agent is pending approval)
 # ---------------------------------------------------------------------------
-info "Running first backup..."
-bash "$BACKUP_SCRIPT"
+CURRENT_STATUS="$(cat "$STATE_DIR/agent.status" 2>/dev/null || echo 'active')"
+
+if [[ "$CURRENT_STATUS" == "pending" ]]; then
+    echo ""
+    info "Agent registered but pending admin approval."
+    info "Backups will start automatically once approved."
+    info "The scheduler is installed and will retry on schedule."
+else
+    info "Running first backup..."
+    bash "$BACKUP_SCRIPT"
+fi
 
 echo ""
 ok "Setup complete!"
 ok "  Master key: $STATE_DIR/master.key"
 ok "  Agent ID:   $(cat "$STATE_DIR/agent.id" 2>/dev/null || echo 'see state dir')"
+ok "  Status:     $CURRENT_STATUS"
 ok "  Schedule:   daily at ${SCHEDULE_HOUR}:00"
 ok "  Service:    $BACKUP_SERVICE_URL"

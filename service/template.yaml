@@ -12,6 +12,11 @@ Parameters:
   RegisterRateLimit:
     Type: Number
     Default: 10
+  AdminAPIKey:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: API key required for admin endpoints (empty = disabled)
 
 Globals:
   Function:
@@ -110,6 +115,7 @@ Resources:
           RETENTION_DAYS: !Ref RetentionDays
           DEFAULT_QUOTA_BYTES: !Ref DefaultQuotaBytes
           REGISTER_RATE_LIMIT: !Ref RegisterRateLimit
+          ADMIN_API_KEY: !Ref AdminAPIKey
           PRESIGN_EXPIRY_SECONDS: 900
       Policies:
         - DynamoDBCrudPolicy:
@@ -142,6 +148,8 @@ Resources:
         AllowHeaders:
           - Authorization
           - Content-Type
+          - X-API-Key
+          - X-Admin-Key
       # API Gateway built-in throttling (replaces in-memory rate limiter)
       DefaultRouteSettings:
         ThrottlingBurstLimit: 20

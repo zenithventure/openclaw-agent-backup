@@ -33,6 +33,9 @@ type Config struct {
 	// Token signing
 	TokenSecret string
 
+	// API key for admin endpoints (empty = disabled, for local dev)
+	AdminAPIKey string
+
 	// Limits
 	DefaultQuotaBytes int64
 	RegisterRateLimit int // requests per minute per IP
@@ -64,6 +67,7 @@ func LoadConfig() *Config {
 		S3SecretKey:        envOr("S3_SECRET_KEY", ""),
 		S3ForcePathStyle:   envOr("S3_FORCE_PATH_STYLE", "false") == "true",
 		TokenSecret:        envOr("TOKEN_SECRET", "change-me-in-production"),
+		AdminAPIKey:        os.Getenv("ADMIN_API_KEY"),
 		DefaultQuotaBytes:  envInt64("DEFAULT_QUOTA_BYTES", 500*1024*1024), // 500 MB
 		RegisterRateLimit:  int(envInt64("REGISTER_RATE_LIMIT", 10)),
 		PresignExpiry:      time.Duration(envInt64("PRESIGN_EXPIRY_SECONDS", 900)) * time.Second,

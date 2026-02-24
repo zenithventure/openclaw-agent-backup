@@ -18,6 +18,8 @@ type DataStore interface {
 	GetAgent(id string) (*Agent, error)
 	RotateAgentToken(agentID, newTokenHash string) error
 	UpdateUsedBytes(agentID string) error
+	ListAgents(status string) ([]Agent, error)
+	UpdateAgentStatus(id, status string) error
 
 	// Backups
 	CreateBackup(b *Backup) error
@@ -42,6 +44,7 @@ type Agent struct {
 	Fingerprint     string
 	EncryptTool     string
 	PublicKey       string
+	Status          string
 	QuotaBytes      int64
 	UsedBytes       int64
 	CreatedAt       time.Time

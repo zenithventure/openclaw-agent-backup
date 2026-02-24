@@ -76,7 +76,7 @@ Set via `openclaw.json` under `skills.entries.backup`:
     "entries": {
       "backup": {
         "env": {
-          "OPENCLAW_BACKUP_URL": "https://backup.openclaw.ai"
+          "OPENCLAW_BACKUP_URL": "https://6j95borao8.execute-api.us-east-1.amazonaws.com"
         },
         "config": {
           "schedule_hour": 3,
@@ -91,10 +91,12 @@ Set via `openclaw.json` under `skills.entries.backup`:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `OPENCLAW_BACKUP_URL` | Backup service endpoint | `https://backup.openclaw.ai` |
+| `OPENCLAW_BACKUP_URL` | Backup service endpoint | `https://6j95borao8.execute-api.us-east-1.amazonaws.com` |
 | `schedule_hour` | Hour (local time) for daily backup | `3` |
 | `exclude_extra` | Additional glob patterns to exclude | `[]` |
 | `max_backup_size_mb` | Safety limit on uncompressed size | `500` |
+
+Registration is open — no API key needed. New agents start in **pending** status and require admin approval before backups can run. The scheduler handles this gracefully and retries until the agent is approved.
 
 ## What gets backed up
 
@@ -146,15 +148,22 @@ OPENCLAW_BACKUP_URL=http://localhost:8080 bash scripts/setup.sh
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/healthz` | No | Health check |
-| `POST` | `/v1/agents/register` | No (rate-limited) | Register a new agent |
-| `GET` | `/v1/agents/me` | Bearer | Get agent info and quota |
+| `POST` | `/v1/agents/register` | None (rate-limited) | Register a new agent (starts as pending) |
+| `GET` | `/v1/agents/me` | Bearer | Get agent info and status |
 | `POST` | `/v1/agents/me/rotate-token` | Bearer | Rotate API token |
-| `POST` | `/v1/backups/upload-url` | Bearer | Get presigned S3 upload URLs |
+| `POST` | `/v1/backups/upload-url` | Bearer (active) | Get presigned S3 upload URLs |
 | `GET` | `/v1/backups` | Bearer | List backup snapshots |
 | `GET` | `/v1/backups/{timestamp}` | Bearer | Get backup metadata |
 | `POST` | `/v1/backups/download-url` | Bearer | Get presigned S3 download URLs |
-| `DELETE` | `/v1/backups/{timestamp}` | Bearer | Delete a specific backup |
-| `DELETE` | `/v1/backups` | Bearer | Delete all backups |
+| `DELETE` | `/v1/backups/{timestamp}` | Bearer (active) | Delete a specific backup |
+| `DELETE` | `/v1/backups` | Bearer (active) | Delete all backups |
+| `GET` | `/v1/admin/agents` | X-API-Key | List agents (optional `?status=` filter) |
+| `POST` | `/v1/admin/agents/{id}/approve` | X-API-Key | Approve a pending agent |
+| `POST` | `/v1/admin/agents/{id}/suspend` | X-API-Key | Suspend an active agent |
+
+**Agent lifecycle:** `register → pending → (admin approves) → active → (admin suspends) → suspended`
+
+Server-side config: set `ADMIN_API_KEY` env var to protect admin endpoints. If empty, admin endpoints are open (useful for local dev).
 
 ## License
 

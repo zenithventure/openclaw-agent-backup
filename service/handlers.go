@@ -32,6 +32,7 @@ type RegisterRequest struct {
 type RegisterResponse struct {
 	AgentID      string `json:"agent_id"`
 	Token        string `json:"token"`
+	Status       string `json:"status"`
 	QuotaMB      int64  `json:"quota_mb"`
 	BackupPrefix string `json:"backup_prefix"`
 }
@@ -72,6 +73,7 @@ func (h *Handlers) Register(w http.ResponseWriter, r *http.Request) {
 		Fingerprint:     req.Fingerprint,
 		EncryptTool:     req.EncryptTool,
 		PublicKey:        req.PublicKey,
+		Status:          "pending",
 		QuotaBytes:      h.config.DefaultQuotaBytes,
 	}
 
@@ -86,6 +88,7 @@ func (h *Handlers) Register(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusCreated, RegisterResponse{
 		AgentID:      agentID,
 		Token:        token,
+		Status:       "pending",
 		QuotaMB:      h.config.DefaultQuotaBytes / (1024 * 1024),
 		BackupPrefix: agentID + "/",
 	})
@@ -400,6 +403,7 @@ type AgentInfoResponse struct {
 	Arch            string `json:"arch"`
 	OpenClawVersion string `json:"openclaw_version"`
 	EncryptTool     string `json:"encrypt_tool"`
+	Status          string `json:"status"`
 	QuotaBytes      int64  `json:"quota_bytes"`
 	UsedBytes       int64  `json:"used_bytes"`
 	CreatedAt       string `json:"created_at"`
@@ -423,6 +427,7 @@ func (h *Handlers) AgentInfo(w http.ResponseWriter, r *http.Request) {
 		Arch:            agent.Arch,
 		OpenClawVersion: agent.OpenClawVersion,
 		EncryptTool:     agent.EncryptTool,
+		Status:          agent.Status,
 		QuotaBytes:      agent.QuotaBytes,
 		UsedBytes:       agent.UsedBytes,
 		CreatedAt:       agent.CreatedAt.Format("2006-01-02T15:04:05Z"),
@@ -458,6 +463,76 @@ func (h *Handlers) RotateToken(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, RotateTokenResponse{
 		Token: newToken,
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Admin handlers
+// ---------------------------------------------------------------------------
+
+type AdminAgentInfo struct {
+	AgentID   string `json:"agent_id"`
+	Name      string `json:"name"`
+	Hostname  string `json:"hostname"`
+	Status    string `json:"status"`
+	CreatedAt string `json:"created_at"`
+}
+
+func (h *Handlers) AdminListAgents(w http.ResponseWriter, r *http.Request) {
+	status := r.URL.Query().Get("status")
+
+	agents, err := h.store.ListAgents(status)
+	if err != nil {
+		log.Printf("ERROR: list agents: %v", err)
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	infos := make([]AdminAgentInfo, len(agents))
+	for i, a := range agents {
+		infos[i] = AdminAgentInfo{
+			AgentID:   a.ID,
+			Name:      a.Name,
+			Hostname:  a.Hostname,
+			Status:    a.Status,
+			CreatedAt: a.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		}
+	}
+
+	jsonResponse(w, http.StatusOK, infos)
+}
+
+func (h *Handlers) AdminApproveAgent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		jsonError(w, "agent id required", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.store.UpdateAgentStatus(id, "active"); err != nil {
+		log.Printf("ERROR: approve agent %s: %v", id, err)
+		jsonError(w, "agent not found", http.StatusNotFound)
+		return
+	}
+
+	log.Printf("admin approved agent %s", id)
+	jsonResponse(w, http.StatusOK, map[string]string{"status": "active"})
+}
+
+func (h *Handlers) AdminSuspendAgent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		jsonError(w, "agent id required", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.store.UpdateAgentStatus(id, "suspended"); err != nil {
+		log.Printf("ERROR: suspend agent %s: %v", id, err)
+		jsonError(w, "agent not found", http.StatusNotFound)
+		return
+	}
+
+	log.Printf("admin suspended agent %s", id)
+	jsonResponse(w, http.StatusOK, map[string]string{"status": "suspended"})
 }
 
 // ---------------------------------------------------------------------------

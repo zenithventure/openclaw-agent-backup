@@ -57,7 +57,7 @@ Encrypted backup blob              ← IV stored in manifest.json
 
 ## Backup Service API
 
-Base URL configured via `OPENCLAW_BACKUP_URL` (default: `https://backup.openclaw.ai`).
+Base URL configured via `OPENCLAW_BACKUP_URL` (default: `https://6j95borao8.execute-api.us-east-1.amazonaws.com`).
 
 ### POST /v1/agents/register
 

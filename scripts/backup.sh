@@ -16,7 +16,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 OPENCLAW_DIR="${OPENCLAW_DIR:-$HOME/.openclaw}"
 STATE_DIR="$OPENCLAW_DIR/skills/backup/.state"
-BACKUP_SERVICE_URL="${OPENCLAW_BACKUP_URL:-https://backup.openclaw.ai}"
+BACKUP_SERVICE_URL="${OPENCLAW_BACKUP_URL:-https://6j95borao8.execute-api.us-east-1.amazonaws.com}"
 MAX_SIZE_MB="${OPENCLAW_BACKUP_MAX_MB:-500}"
 TIMESTAMP="$(date -u +%Y-%m-%dT%H%M%SZ)"
 TMP_DIR=""
@@ -241,13 +241,23 @@ UPLOAD_REQUEST=$(jq -n \
         encrypted_sha256: $encrypted_sha256
     }')
 
-UPLOAD_RESPONSE=$(curl -sf \
+UPLOAD_HTTP_STATUS=$(curl -s -o "$TMP_DIR/upload-response.json" -w "%{http_code}" \
     -X POST \
     -H "$(auth_header)" \
     -H "Content-Type: application/json" \
     -d "$UPLOAD_REQUEST" \
-    "$BACKUP_SERVICE_URL/v1/backups/upload-url") \
-    || die "Failed to get upload URLs from backup service"
+    "$BACKUP_SERVICE_URL/v1/backups/upload-url")
+
+if [[ "$UPLOAD_HTTP_STATUS" == "403" ]]; then
+    ok "Agent not yet approved. Backups will start once an admin approves this agent."
+    exit 0
+fi
+
+if [[ ! "$UPLOAD_HTTP_STATUS" =~ ^2 ]]; then
+    die "Failed to get upload URLs from backup service (HTTP $UPLOAD_HTTP_STATUS)"
+fi
+
+UPLOAD_RESPONSE=$(cat "$TMP_DIR/upload-response.json")
 
 BACKUP_UPLOAD_URL=$(echo "$UPLOAD_RESPONSE" | jq -r '.urls["backup.tar.gz.enc"] // empty')
 MANIFEST_UPLOAD_URL=$(echo "$UPLOAD_RESPONSE" | jq -r '.urls["manifest.json"] // empty')
