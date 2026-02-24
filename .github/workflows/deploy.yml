@@ -81,6 +81,10 @@ jobs:
       - name: Deploy to Dev
         working-directory: service
         run: |
+          PARAMS=""
+          if [ -n "${{ secrets.ADMIN_API_KEY }}" ]; then
+            PARAMS="--parameter-overrides AdminAPIKey=${{ secrets.ADMIN_API_KEY }}"
+          fi
           sam deploy \
             --stack-name ${{ env.STACK_NAME }} \
             --region ${{ env.AWS_REGION }} \
@@ -89,8 +93,7 @@ jobs:
             --capabilities CAPABILITY_IAM \
             --resolve-s3 \
             --s3-prefix ${{ env.STACK_NAME }} \
-            --parameter-overrides \
-              "AdminAPIKey=${{ secrets.ADMIN_API_KEY }}"
+            $PARAMS
 
   # ==========================================================================
   # Deploy to QA — On -qa tag or manual dispatch
@@ -125,6 +128,10 @@ jobs:
       - name: Deploy to QA
         working-directory: service
         run: |
+          PARAMS=""
+          if [ -n "${{ secrets.ADMIN_API_KEY }}" ]; then
+            PARAMS="--parameter-overrides AdminAPIKey=${{ secrets.ADMIN_API_KEY }}"
+          fi
           sam deploy \
             --stack-name ${{ env.STACK_NAME }} \
             --region ${{ env.AWS_REGION }} \
@@ -133,8 +140,7 @@ jobs:
             --capabilities CAPABILITY_IAM \
             --resolve-s3 \
             --s3-prefix ${{ env.STACK_NAME }} \
-            --parameter-overrides \
-              "AdminAPIKey=${{ secrets.ADMIN_API_KEY }}"
+            $PARAMS
 
   # ==========================================================================
   # Deploy to Prod — On release tag or manual dispatch (requires approval)
@@ -169,6 +175,10 @@ jobs:
       - name: Deploy to Prod
         working-directory: service
         run: |
+          PARAMS=""
+          if [ -n "${{ secrets.ADMIN_API_KEY }}" ]; then
+            PARAMS="--parameter-overrides AdminAPIKey=${{ secrets.ADMIN_API_KEY }}"
+          fi
           sam deploy \
             --stack-name ${{ env.STACK_NAME }} \
             --region ${{ env.AWS_REGION }} \
@@ -177,5 +187,4 @@ jobs:
             --capabilities CAPABILITY_IAM \
             --resolve-s3 \
             --s3-prefix ${{ env.STACK_NAME }} \
-            --parameter-overrides \
-              "AdminAPIKey=${{ secrets.ADMIN_API_KEY }}"
+            $PARAMS
