@@ -17,6 +17,10 @@ set -euo pipefail
 OPENCLAW_DIR="${OPENCLAW_DIR:-$HOME/.openclaw}"
 STATE_DIR="$OPENCLAW_DIR/skills/backup/.state"
 BACKUP_SERVICE_URL="${OPENCLAW_BACKUP_URL:-https://6j95borao8.execute-api.us-east-1.amazonaws.com}"
+
+# Add local bin to PATH (age may be installed here by setup.sh)
+LOCAL_BIN="$OPENCLAW_DIR/skills/backup/.local/bin"
+[[ -d "$LOCAL_BIN" ]] && export PATH="$LOCAL_BIN:$PATH"
 MAX_SIZE_MB="${OPENCLAW_BACKUP_MAX_MB:-500}"
 TIMESTAMP="$(date -u +%Y-%m-%dT%H%M%SZ)"
 TMP_DIR=""

@@ -23,6 +23,10 @@ RESTORE_DATE=""
 DRY_RUN=0
 TMP_DIR=""
 
+# Add local bin to PATH (age may be installed here by setup.sh)
+LOCAL_BIN="$OPENCLAW_DIR/skills/backup/.local/bin"
+[[ -d "$LOCAL_BIN" ]] && export PATH="$LOCAL_BIN:$PATH"
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

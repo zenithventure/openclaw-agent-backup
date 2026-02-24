@@ -41,6 +41,14 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ---------------------------------------------------------------------------
+# Local bin directory (for user-space installs)
+# ---------------------------------------------------------------------------
+LOCAL_BIN="$OPENCLAW_DIR/skills/backup/.local/bin"
+if [[ -d "$LOCAL_BIN" ]]; then
+    export PATH="$LOCAL_BIN:$PATH"
+fi
+
+# ---------------------------------------------------------------------------
 # Preflight checks
 # ---------------------------------------------------------------------------
 info "Running preflight checks..."
@@ -50,6 +58,45 @@ info "Running preflight checks..."
 for cmd in curl tar jq; do
     has_cmd "$cmd" || die "Required command not found: $cmd"
 done
+
+# ---------------------------------------------------------------------------
+# Install age locally if not available
+# ---------------------------------------------------------------------------
+if ! has_cmd age; then
+    info "age not found in PATH, installing locally..."
+
+    AGE_VERSION="1.2.1"
+    AGENT_OS="$(uname -s)"
+    AGENT_ARCH="$(uname -m)"
+
+    case "${AGENT_OS}_${AGENT_ARCH}" in
+        Linux_x86_64)  AGE_ARCHIVE="age-v${AGE_VERSION}-linux-amd64.tar.gz" ;;
+        Linux_aarch64) AGE_ARCHIVE="age-v${AGE_VERSION}-linux-arm64.tar.gz" ;;
+        Darwin_x86_64) AGE_ARCHIVE="age-v${AGE_VERSION}-darwin-amd64.tar.gz" ;;
+        Darwin_arm64)  AGE_ARCHIVE="age-v${AGE_VERSION}-darwin-arm64.tar.gz" ;;
+        *) die "Unsupported platform for age install: ${AGENT_OS}_${AGENT_ARCH}. Install age manually or use openssl." ;;
+    esac
+
+    AGE_URL="https://github.com/FiloSottile/age/releases/download/v${AGE_VERSION}/${AGE_ARCHIVE}"
+    AGE_TMP="$(mktemp -d)"
+
+    info "Downloading age v${AGE_VERSION} from $AGE_URL ..."
+    curl -sfL -o "$AGE_TMP/$AGE_ARCHIVE" "$AGE_URL" \
+        || die "Failed to download age. Install it manually: https://github.com/FiloSottile/age"
+
+    tar xzf "$AGE_TMP/$AGE_ARCHIVE" -C "$AGE_TMP"
+
+    mkdir -p "$LOCAL_BIN"
+    cp "$AGE_TMP/age/age" "$LOCAL_BIN/age"
+    cp "$AGE_TMP/age/age-keygen" "$LOCAL_BIN/age-keygen"
+    chmod +x "$LOCAL_BIN/age" "$LOCAL_BIN/age-keygen"
+    rm -rf "$AGE_TMP"
+
+    export PATH="$LOCAL_BIN:$PATH"
+
+    has_cmd age || die "age install failed — binary not found after install"
+    ok "Installed age v${AGE_VERSION} to $LOCAL_BIN"
+fi
 
 # Determine encryption tool
 if has_cmd age; then
@@ -249,7 +296,7 @@ case "$AGENT_OS" in
         <key>OPENCLAW_BACKUP_URL</key>
         <string>$BACKUP_SERVICE_URL</string>
         <key>PATH</key>
-        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <string>$LOCAL_BIN:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
     </dict>
 </dict>
 </plist>
@@ -276,6 +323,7 @@ Type=oneshot
 ExecStart=/bin/bash $BACKUP_SCRIPT
 Environment=OPENCLAW_DIR=$OPENCLAW_DIR
 Environment=OPENCLAW_BACKUP_URL=$BACKUP_SERVICE_URL
+Environment=PATH=$LOCAL_BIN:/usr/local/bin:/usr/bin:/bin
 UNIT
 
             cat > "$SYSTEMD_DIR/$LABEL.timer" <<TIMER
@@ -296,7 +344,7 @@ TIMER
             ok "Installed systemd timer at $SYSTEMD_DIR/$LABEL.timer"
         else
             # Cron fallback
-            CRON_LINE="0 $SCHEDULE_HOUR * * * OPENCLAW_DIR=$OPENCLAW_DIR OPENCLAW_BACKUP_URL=$BACKUP_SERVICE_URL /bin/bash $BACKUP_SCRIPT >> $STATE_DIR/backup.log 2>&1"
+            CRON_LINE="0 $SCHEDULE_HOUR * * * PATH=$LOCAL_BIN:/usr/local/bin:/usr/bin:/bin OPENCLAW_DIR=$OPENCLAW_DIR OPENCLAW_BACKUP_URL=$BACKUP_SERVICE_URL /bin/bash $BACKUP_SCRIPT >> $STATE_DIR/backup.log 2>&1"
 
             # Add to crontab if not already present
             (crontab -l 2>/dev/null | grep -v "$LABEL" ; echo "# $LABEL"; echo "$CRON_LINE") | crontab -
