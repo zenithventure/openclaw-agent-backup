@@ -33,6 +33,8 @@ env:
   PROD_ACCOUNT_ID: "923935061349"
   AWS_REGION: "us-east-1"
   STACK_NAME: "openclaw-backup-service"
+  # Bucket name must contain "serverless" to match OIDC role S3 policy
+  S3_BUCKET_PREFIX: "openclaw-serverless-artifacts"
 
 jobs:
   # ==========================================================================
@@ -78,6 +80,12 @@ jobs:
           role-to-assume: arn:aws:iam::${{ env.DEV_ACCOUNT_ID }}:role/GitHubActionsDeployRole
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Ensure S3 artifact bucket exists
+        run: |
+          BUCKET="${{ env.S3_BUCKET_PREFIX }}-${{ env.DEV_ACCOUNT_ID }}"
+          aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null || \
+            aws s3 mb "s3://$BUCKET" --region ${{ env.AWS_REGION }}
+
       - name: Deploy to Dev
         working-directory: service
         run: |
@@ -91,7 +99,7 @@ jobs:
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
             --capabilities CAPABILITY_IAM \
-            --resolve-s3 \
+            --s3-bucket ${{ env.S3_BUCKET_PREFIX }}-${{ env.DEV_ACCOUNT_ID }} \
             --s3-prefix ${{ env.STACK_NAME }} \
             $PARAMS
 
@@ -125,6 +133,12 @@ jobs:
           role-to-assume: arn:aws:iam::${{ env.QA_ACCOUNT_ID }}:role/GitHubActionsDeployRole
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Ensure S3 artifact bucket exists
+        run: |
+          BUCKET="${{ env.S3_BUCKET_PREFIX }}-${{ env.QA_ACCOUNT_ID }}"
+          aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null || \
+            aws s3 mb "s3://$BUCKET" --region ${{ env.AWS_REGION }}
+
       - name: Deploy to QA
         working-directory: service
         run: |
@@ -138,7 +152,7 @@ jobs:
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
             --capabilities CAPABILITY_IAM \
-            --resolve-s3 \
+            --s3-bucket ${{ env.S3_BUCKET_PREFIX }}-${{ env.QA_ACCOUNT_ID }} \
             --s3-prefix ${{ env.STACK_NAME }} \
             $PARAMS
 
@@ -172,6 +186,12 @@ jobs:
           role-to-assume: arn:aws:iam::${{ env.PROD_ACCOUNT_ID }}:role/GitHubActionsDeployRole
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Ensure S3 artifact bucket exists
+        run: |
+          BUCKET="${{ env.S3_BUCKET_PREFIX }}-${{ env.PROD_ACCOUNT_ID }}"
+          aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null || \
+            aws s3 mb "s3://$BUCKET" --region ${{ env.AWS_REGION }}
+
       - name: Deploy to Prod
         working-directory: service
         run: |
@@ -185,6 +205,6 @@ jobs:
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
             --capabilities CAPABILITY_IAM \
-            --resolve-s3 \
+            --s3-bucket ${{ env.S3_BUCKET_PREFIX }}-${{ env.PROD_ACCOUNT_ID }} \
             --s3-prefix ${{ env.STACK_NAME }} \
             $PARAMS
