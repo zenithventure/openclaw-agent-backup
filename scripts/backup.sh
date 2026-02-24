@@ -98,6 +98,21 @@ fi
 
 ENCRYPT_TOOL="$(cat "$STATE_DIR/encrypt-tool" 2>/dev/null || echo 'age')"
 
+# ---------------------------------------------------------------------------
+# Check agent status (discovers approval, updates local state)
+# ---------------------------------------------------------------------------
+AGENT_STATUS_RESP=$(curl -sf -H "$(auth_header)" "$BACKUP_SERVICE_URL/v1/agents/me" 2>/dev/null) || true
+if [[ -n "$AGENT_STATUS_RESP" ]]; then
+    REMOTE_STATUS=$(echo "$AGENT_STATUS_RESP" | jq -r '.status // empty')
+    if [[ -n "$REMOTE_STATUS" ]]; then
+        echo "$REMOTE_STATUS" > "$STATE_DIR/agent.status"
+        if [[ "$REMOTE_STATUS" != "active" ]]; then
+            ok "Agent status: $REMOTE_STATUS. Backups will start once an admin approves this agent."
+            exit 0
+        fi
+    fi
+fi
+
 # Check staleness — skip if backup ran less than 20 hours ago (avoids duplicate runs)
 if [[ -f "$STATE_DIR/last-backup" ]]; then
     LAST_EPOCH=$(date -j -f "%Y-%m-%dT%H%M%SZ" "$(cat "$STATE_DIR/last-backup")" +%s 2>/dev/null \
