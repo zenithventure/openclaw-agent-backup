@@ -52,6 +52,16 @@ auth_header() {
 if [[ "${1:-}" == "--status" ]]; then
     info "Checking backup status..."
 
+    # Check live agent status from the service
+    AGENT_RESP=$(curl -sf -H "$(auth_header)" "$BACKUP_SERVICE_URL/v1/agents/me" 2>/dev/null) || true
+    if [[ -n "$AGENT_RESP" ]]; then
+        LIVE_STATUS=$(echo "$AGENT_RESP" | jq -r '.status // "unknown"')
+        echo "$LIVE_STATUS" > "$STATE_DIR/agent.status"
+        echo "Agent status: $LIVE_STATUS"
+    else
+        echo "Agent status: $(cat "$STATE_DIR/agent.status" 2>/dev/null || echo 'unknown')"
+    fi
+
     if [[ -f "$STATE_DIR/last-backup" ]]; then
         LAST="$(cat "$STATE_DIR/last-backup")"
         echo "Last backup: $LAST"
