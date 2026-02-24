@@ -1,0 +1,198 @@
+# OpenClaw Backup Service — Build, Test & Deploy
+# ================================================
+# SAM-based Lambda service deployed to SchedulSign accounts.
+#
+# Promotion flow:
+#   Push to main           -> Build + Test + Deploy to Dev (automatic)
+#   Tag v1.2.3-qa          -> Deploy to QA
+#   Tag v1.2.3 (no suffix) -> Deploy to Prod (requires approval)
+#   Manual dispatch         -> Deploy to selected environment
+
+name: Build and Deploy
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options: [dev, qa, prod]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  # SchedulSign accounts
+  DEV_ACCOUNT_ID: "252967153935"
+  QA_ACCOUNT_ID: "873595708276"
+  PROD_ACCOUNT_ID: "923935061349"
+  AWS_REGION: "us-east-1"
+  STACK_NAME: "openclaw-backup-service"
+
+jobs:
+  # ==========================================================================
+  # Build & Test — Runs on every push
+  # ==========================================================================
+  build:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      artifact_name: ${{ steps.meta.outputs.artifact_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: service/go.sum
+
+      - name: Run tests
+        working-directory: service
+        run: go test -v ./...
+
+      - name: SAM build
+        working-directory: service
+        run: sam build
+
+      - name: Generate artifact name
+        id: meta
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "artifact_name=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "artifact_name=main-${{ github.sha }}" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sam-build-${{ steps.meta.outputs.artifact_name }}
+          path: service/.aws-sam/
+          retention-days: 30
+
+  # ==========================================================================
+  # Deploy to Dev — Automatic on push to main
+  # ==========================================================================
+  deploy-dev:
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sam-build-${{ needs.build.outputs.artifact_name }}
+          path: service/.aws-sam/
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ env.DEV_ACCOUNT_ID }}:role/GitHubActionsDeployRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy to Dev
+        working-directory: service
+        run: |
+          sam deploy \
+            --stack-name ${{ env.STACK_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --capabilities CAPABILITY_IAM \
+            --resolve-s3 \
+            --s3-prefix ${{ env.STACK_NAME }} \
+            --parameter-overrides \
+              "AdminAPIKey=${{ secrets.ADMIN_API_KEY }}"
+
+  # ==========================================================================
+  # Deploy to QA — On -qa tag or manual dispatch
+  # ==========================================================================
+  deploy-qa:
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'qa') ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && contains(github.ref, '-qa'))
+    runs-on: ubuntu-latest
+    environment: qa
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: service/go.sum
+
+      - name: Run tests
+        working-directory: service
+        run: go test -v ./...
+
+      - name: SAM build
+        working-directory: service
+        run: sam build
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ env.QA_ACCOUNT_ID }}:role/GitHubActionsDeployRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy to QA
+        working-directory: service
+        run: |
+          sam deploy \
+            --stack-name ${{ env.STACK_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --capabilities CAPABILITY_IAM \
+            --resolve-s3 \
+            --s3-prefix ${{ env.STACK_NAME }} \
+            --parameter-overrides \
+              "AdminAPIKey=${{ secrets.ADMIN_API_KEY }}"
+
+  # ==========================================================================
+  # Deploy to Prod — On release tag or manual dispatch (requires approval)
+  # ==========================================================================
+  deploy-prod:
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod') ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-'))
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: service/go.sum
+
+      - name: Run tests
+        working-directory: service
+        run: go test -v ./...
+
+      - name: SAM build
+        working-directory: service
+        run: sam build
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ env.PROD_ACCOUNT_ID }}:role/GitHubActionsDeployRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy to Prod
+        working-directory: service
+        run: |
+          sam deploy \
+            --stack-name ${{ env.STACK_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --capabilities CAPABILITY_IAM \
+            --resolve-s3 \
+            --s3-prefix ${{ env.STACK_NAME }} \
+            --parameter-overrides \
+              "AdminAPIKey=${{ secrets.ADMIN_API_KEY }}"
