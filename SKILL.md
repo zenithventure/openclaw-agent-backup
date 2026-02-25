@@ -111,7 +111,7 @@ Set via `openclaw.json` under `skills.entries.backup`:
     "entries": {
       "backup": {
         "env": {
-          "OPENCLAW_BACKUP_URL": "https://6j95borao8.execute-api.us-east-1.amazonaws.com"
+          "OPENCLAW_BACKUP_URL": "https://agentbackup.zenithstudio.app"
         },
         "config": {
           "schedule_hour": 3,
@@ -124,7 +124,7 @@ Set via `openclaw.json` under `skills.entries.backup`:
 }
 ```
 
-- `OPENCLAW_BACKUP_URL` -- Backup service endpoint (default: `https://6j95borao8.execute-api.us-east-1.amazonaws.com`)
+- `OPENCLAW_BACKUP_URL` -- Backup service endpoint (default: `https://agentbackup.zenithstudio.app`)
 - `schedule_hour` -- Hour of day for scheduled backup in local time (default: 3)
 - `exclude_extra` -- Additional glob patterns to exclude from backup
 - `max_backup_size_mb` -- Safety limit on uncompressed backup size (default: 500)

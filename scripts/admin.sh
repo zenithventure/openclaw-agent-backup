@@ -9,7 +9,7 @@
 #
 set -euo pipefail
 
-BACKUP_SERVICE_URL="${OPENCLAW_BACKUP_URL:-https://6j95borao8.execute-api.us-east-1.amazonaws.com}"
+BACKUP_SERVICE_URL="${OPENCLAW_BACKUP_URL:-https://agentbackup.zenithstudio.app}"
 ADMIN_KEY="${ADMIN_API_KEY:-}"
 
 # ---------------------------------------------------------------------------
@@ -38,7 +38,7 @@ Commands:
   suspend <agent_id>  Suspend an agent
 
 Environment:
-  OPENCLAW_BACKUP_URL  Service URL (default: https://6j95borao8.execute-api.us-east-1.amazonaws.com)
+  OPENCLAW_BACKUP_URL  Service URL (default: https://agentbackup.zenithstudio.app)
   ADMIN_API_KEY        Admin API key for X-API-Key header
 EOF
     exit 1

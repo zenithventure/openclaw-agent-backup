@@ -17,7 +17,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 OPENCLAW_DIR="${OPENCLAW_DIR:-$HOME/.openclaw}"
 STATE_DIR="$OPENCLAW_DIR/skills/backup/.state"
-BACKUP_SERVICE_URL="${OPENCLAW_BACKUP_URL:-https://6j95borao8.execute-api.us-east-1.amazonaws.com}"
+BACKUP_SERVICE_URL="${OPENCLAW_BACKUP_URL:-https://agentbackup.zenithstudio.app}"
 TARGET_DIR=""
 RESTORE_DATE=""
 DRY_RUN=0
