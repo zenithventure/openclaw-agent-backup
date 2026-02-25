@@ -191,6 +191,57 @@
             color: var(--text-muted);
         }
 
+        .hero-command-copy {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            margin-top: 0.75rem;
+            padding: 0.6rem 1rem;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+
+        .hero-command-copy:hover {
+            border-color: rgba(34, 197, 94, 0.4);
+        }
+
+        .hero-command-copy span {
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            font-size: 0.85rem;
+            color: var(--text-primary);
+            user-select: all;
+            white-space: nowrap;
+            overflow-x: auto;
+        }
+
+        .copy-btn {
+            flex-shrink: 0;
+            background: none;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-secondary);
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 0.3rem 0.75rem;
+            cursor: pointer;
+            transition: color 0.2s, border-color 0.2s;
+        }
+
+        .copy-btn:hover {
+            color: var(--accent-green);
+            border-color: var(--accent-green);
+        }
+
+        .copy-btn.copied {
+            color: var(--accent-green);
+            border-color: var(--accent-green);
+        }
+
         .hero-arrow {
             font-size: 0.85rem;
             color: var(--text-muted);
@@ -506,9 +557,13 @@
                 Install the backup skill from<br>
                 <span class="dimmed">https://github.com/zenithventure/openclaw-agent-backup</span>
             </div>
+            <div class="hero-command-copy" onclick="copyCommand(this)">
+                <span>Install the backup skill from https://github.com/zenithventure/openclaw-agent-backup</span>
+                <button class="copy-btn">Copy</button>
+            </div>
         </div>
         <p class="hero-arrow">Your agent handles the rest — key generation, registration, and scheduling.</p>
-        <a class="hero-cta" href="https://openclaw.ai">Get OpenClaw</a>
+        <a class="hero-cta" href="https://github.com/zenithventure/openclaw-agent-backup">View on GitHub</a>
     </section>
 
     <section class="features">
@@ -637,5 +692,19 @@
         <p>&copy; 2026 Zenith Venture Studio. Built for builders.</p>
     </footer>
 
+    <script>
+    function copyCommand(el) {
+        var text = el.querySelector('span').textContent;
+        navigator.clipboard.writeText(text).then(function() {
+            var btn = el.querySelector('.copy-btn');
+            btn.textContent = 'Copied!';
+            btn.classList.add('copied');
+            setTimeout(function() {
+                btn.textContent = 'Copy';
+                btn.classList.remove('copied');
+            }, 2000);
+        });
+    }
+    </script>
 </body>
 </html>
