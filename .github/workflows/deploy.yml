@@ -104,6 +104,18 @@ jobs:
             --s3-prefix ${{ env.STACK_NAME }} \
             $PARAMS
 
+      - name: Smoke test
+        run: |
+          API_URL=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --query 'Stacks[0].Outputs[?OutputKey==`ApiUrl`].OutputValue' \
+            --output text)
+          echo "API_URL=$API_URL"
+          bash test-local.sh "$API_URL"
+        env:
+          ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
+
   # ==========================================================================
   # Deploy to QA — On -qa tag or manual dispatch
   # ==========================================================================
@@ -158,6 +170,18 @@ jobs:
             --s3-prefix ${{ env.STACK_NAME }} \
             $PARAMS
 
+      - name: Smoke test
+        run: |
+          API_URL=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --query 'Stacks[0].Outputs[?OutputKey==`ApiUrl`].OutputValue' \
+            --output text)
+          echo "API_URL=$API_URL"
+          bash test-local.sh "$API_URL"
+        env:
+          ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
+
   # ==========================================================================
   # Deploy to Prod — On release tag or manual dispatch (requires approval)
   # ==========================================================================
@@ -211,3 +235,15 @@ jobs:
             --s3-bucket ${{ env.S3_BUCKET_PREFIX }}-${{ env.PROD_ACCOUNT_ID }} \
             --s3-prefix ${{ env.STACK_NAME }} \
             $PARAMS
+
+      - name: Smoke test
+        run: |
+          API_URL=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --query 'Stacks[0].Outputs[?OutputKey==`ApiUrl`].OutputValue' \
+            --output text)
+          echo "API_URL=$API_URL"
+          bash test-local.sh "$API_URL"
+        env:
+          ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
