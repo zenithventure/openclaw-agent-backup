@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenClaw Agent Backup — Encrypted Daily Backups</title>
+    <meta name="description" content="Encrypted daily backup for OpenClaw agents. Zero-knowledge architecture — your data never leaves your machine unencrypted.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #08080c;
+            --bg-secondary: #0f0f16;
+            --bg-card: #16161f;
+            --text-primary: #ffffff;
+            --text-secondary: #9d9db5;
+            --text-muted: #5e5e76;
+            --accent-green: #22c55e;
+            --accent-lime: #84cc16;
+            --accent-yellow: #eab308;
+            --accent-gradient: linear-gradient(135deg, #22c55e 0%, #84cc16 50%, #eab308 100%);
+            --border-color: rgba(255, 255, 255, 0.06);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Navigation */
+        nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 100;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 2rem;
+            background: rgba(8, 8, 12, 0.8);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .nav-left {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .nav-logo {
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 700;
+            font-size: 1.1rem;
+            color: var(--text-primary);
+            text-decoration: none;
+        }
+
+        .nav-divider {
+            color: var(--text-muted);
+        }
+
+        .nav-title {
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 600;
+            font-size: 0.95rem;
+            color: var(--text-secondary);
+        }
+
+        .nav-link {
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 600;
+            font-size: 0.85rem;
+            color: var(--bg-primary);
+            background: var(--accent-green);
+            padding: 0.5rem 1.25rem;
+            border-radius: 6px;
+            text-decoration: none;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .nav-link:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(34, 197, 94, 0.3);
+        }
+
+        /* Hero */
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 8rem 2rem 6rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: -20%;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 800px;
+            height: 800px;
+            background: radial-gradient(circle, rgba(34, 197, 94, 0.08) 0%, transparent 70%);
+            pointer-events: none;
+        }
+
+        .hero-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1.25rem;
+            border: 1px solid rgba(34, 197, 94, 0.3);
+            background: rgba(34, 197, 94, 0.08);
+            border-radius: 100px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: var(--accent-green);
+            margin-bottom: 2rem;
+        }
+
+        .hero h1 {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: clamp(2.5rem, 6vw, 4.5rem);
+            font-weight: 800;
+            line-height: 1.1;
+            max-width: 800px;
+            margin-bottom: 1.5rem;
+        }
+
+        .gradient-text {
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero-sub {
+            font-size: 1.2rem;
+            color: var(--text-secondary);
+            max-width: 600px;
+            margin-bottom: 2.5rem;
+            line-height: 1.7;
+        }
+
+        .hero-command {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem 2rem;
+            max-width: 680px;
+            width: 100%;
+            margin-bottom: 1.5rem;
+            text-align: left;
+        }
+
+        .hero-command-label {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--accent-green);
+            margin-bottom: 0.75rem;
+        }
+
+        .hero-command-text {
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            font-size: 0.95rem;
+            color: var(--text-primary);
+            line-height: 1.6;
+            word-break: break-word;
+        }
+
+        .hero-command-text .dimmed {
+            color: var(--text-muted);
+        }
+
+        .hero-arrow {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-bottom: 2.5rem;
+        }
+
+        .hero-cta {
+            display: inline-block;
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 700;
+            font-size: 1rem;
+            color: var(--bg-primary);
+            background: var(--accent-green);
+            padding: 1rem 2.5rem;
+            border-radius: 8px;
+            text-decoration: none;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .hero-cta:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(34, 197, 94, 0.3);
+        }
+
+        /* Features */
+        .features {
+            padding: 6rem 2rem;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .features h2 {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: clamp(1.8rem, 4vw, 2.5rem);
+            font-weight: 700;
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+        }
+
+        .feature-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 2rem;
+        }
+
+        .feature-icon {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .feature-card h3 {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 1.1rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+
+        .feature-card p {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+
+        /* How it works */
+        .how-it-works {
+            padding: 6rem 2rem;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .how-it-works h2 {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: clamp(1.8rem, 4vw, 2.5rem);
+            font-weight: 700;
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+
+        .steps {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .step {
+            display: flex;
+            gap: 1.5rem;
+            align-items: flex-start;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 2rem;
+        }
+
+        .step-number {
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 800;
+            font-size: 1.5rem;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            flex-shrink: 0;
+            width: 2rem;
+        }
+
+        .step h3 {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 1.05rem;
+            font-weight: 700;
+            margin-bottom: 0.25rem;
+        }
+
+        .step p {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+
+        .step code {
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            font-size: 0.8rem;
+            background: var(--bg-primary);
+            padding: 0.15rem 0.5rem;
+            border-radius: 4px;
+            color: var(--accent-green);
+        }
+
+        /* API */
+        .api-section {
+            padding: 6rem 2rem;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .api-section h2 {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: clamp(1.8rem, 4vw, 2.5rem);
+            font-weight: 700;
+            text-align: center;
+            margin-bottom: 1rem;
+        }
+
+        .api-section .subtitle {
+            text-align: center;
+            color: var(--text-secondary);
+            margin-bottom: 3rem;
+            font-size: 1rem;
+        }
+
+        .api-endpoint {
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            font-size: 1.1rem;
+            text-align: center;
+            padding: 1.25rem 2rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            margin-bottom: 2rem;
+            color: var(--accent-green);
+        }
+
+        .api-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--bg-card);
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid var(--border-color);
+        }
+
+        .api-table th {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-muted);
+            text-align: left;
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .api-table td {
+            padding: 0.75rem 1.25rem;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .api-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .api-table .method {
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--accent-lime);
+        }
+
+        .api-table .path {
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            font-size: 0.8rem;
+            color: var(--text-primary);
+        }
+
+        /* Footer */
+        footer {
+            padding: 4rem 2rem;
+            text-align: center;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .footer-links {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .footer-links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: color 0.2s;
+        }
+
+        .footer-links a:hover {
+            color: var(--text-primary);
+        }
+
+        footer p {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            nav {
+                padding: 0.75rem 1.25rem;
+            }
+
+            .hero {
+                padding: 7rem 1.25rem 4rem;
+            }
+
+            .hero-command {
+                padding: 1.25rem 1.5rem;
+            }
+
+            .hero-command-text {
+                font-size: 0.85rem;
+            }
+
+            .features-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .step {
+                flex-direction: column;
+                gap: 0.75rem;
+            }
+
+            .api-table {
+                font-size: 0.8rem;
+            }
+
+            .api-table th,
+            .api-table td {
+                padding: 0.6rem 0.75rem;
+            }
+
+            .footer-links {
+                flex-direction: column;
+                gap: 0.75rem;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <nav>
+        <div class="nav-left">
+            <a class="nav-logo" href="https://zenithstudio.io">Zenith</a>
+            <span class="nav-divider">/</span>
+            <span class="nav-title">Agent Backup</span>
+        </div>
+        <a class="nav-link" href="https://github.com/zenithventure/openclaw-agent-backup">GitHub</a>
+    </nav>
+
+    <section class="hero">
+        <div class="hero-badge">
+            Open source &middot; Zero-knowledge encryption
+        </div>
+        <h1>
+            <span class="gradient-text">Encrypted Backups</span>
+            for Your OpenClaw Agent
+        </h1>
+        <p class="hero-sub">
+            Daily encrypted backups of your agent's state. Your data is encrypted locally before it ever leaves your machine — the server only sees opaque blobs.
+        </p>
+        <div class="hero-command">
+            <div class="hero-command-label">Just tell your agent</div>
+            <div class="hero-command-text">
+                Install the backup skill from<br>
+                <span class="dimmed">https://github.com/zenithventure/openclaw-agent-backup</span>
+            </div>
+        </div>
+        <p class="hero-arrow">Your agent handles the rest — key generation, registration, and scheduling.</p>
+        <a class="hero-cta" href="https://openclaw.ai">Get OpenClaw</a>
+    </section>
+
+    <section class="features">
+        <h2>Why back up your agent?</h2>
+        <div class="features-grid">
+            <div class="feature-card">
+                <div class="feature-icon">&#x1f512;</div>
+                <h3>End-to-end encrypted</h3>
+                <p>Encryption happens on your machine using age (X25519 + ChaCha20-Poly1305). The server never sees your keys or plaintext data.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">&#x1f504;</div>
+                <h3>Automatic daily backups</h3>
+                <p>Once installed, backups run daily on a schedule. No manual steps needed — your agent's memory, skills, and config are always protected.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">&#x23ee;&#xfe0f;</div>
+                <h3>Point-in-time restore</h3>
+                <p>Restore to any of the last 7 daily snapshots. Preview what would be restored before committing with <code>--dry-run</code>.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">&#x1f6e1;&#xfe0f;</div>
+                <h3>Delete protection</h3>
+                <p>Soft-delete with a 72-hour grace period. Even if a token is compromised, your backups can be recovered.</p>
+            </div>
+        </div>
+    </section>
+
+    <section class="how-it-works">
+        <h2>How it works</h2>
+        <div class="steps">
+            <div class="step">
+                <div class="step-number">1</div>
+                <div>
+                    <h3>Tell your agent to install</h3>
+                    <p>Say: "Install the backup skill from https://github.com/zenithventure/openclaw-agent-backup" — your agent runs setup automatically.</p>
+                </div>
+            </div>
+            <div class="step">
+                <div class="step-number">2</div>
+                <div>
+                    <h3>Keys are generated locally</h3>
+                    <p>An <code>age</code> keypair is created on your machine. The private key never leaves your device.</p>
+                </div>
+            </div>
+            <div class="step">
+                <div class="step-number">3</div>
+                <div>
+                    <h3>Agent registers with the service</h3>
+                    <p>Your agent registers and starts in <strong>pending</strong> status. An admin approves it, then daily encrypted backups begin automatically.</p>
+                </div>
+            </div>
+            <div class="step">
+                <div class="step-number">4</div>
+                <div>
+                    <h3>Encrypted uploads via presigned URLs</h3>
+                    <p>Each backup is compressed, encrypted locally, then uploaded directly to S3 via presigned URLs. The service never touches your data.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="api-section">
+        <h2>API</h2>
+        <p class="subtitle">The backup service exposes a simple REST API for agents and admins.</p>
+        <div class="api-endpoint">https://agentbackup.zenithstudio.app</div>
+        <table class="api-table">
+            <thead>
+                <tr>
+                    <th>Method</th>
+                    <th>Path</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td class="method">GET</td>
+                    <td class="path">/healthz</td>
+                    <td>Health check</td>
+                </tr>
+                <tr>
+                    <td class="method">POST</td>
+                    <td class="path">/v1/agents/register</td>
+                    <td>Register a new agent</td>
+                </tr>
+                <tr>
+                    <td class="method">GET</td>
+                    <td class="path">/v1/agents/me</td>
+                    <td>Get agent info and status</td>
+                </tr>
+                <tr>
+                    <td class="method">POST</td>
+                    <td class="path">/v1/backups/upload-url</td>
+                    <td>Get presigned upload URLs</td>
+                </tr>
+                <tr>
+                    <td class="method">GET</td>
+                    <td class="path">/v1/backups</td>
+                    <td>List backup snapshots</td>
+                </tr>
+                <tr>
+                    <td class="method">POST</td>
+                    <td class="path">/v1/backups/download-url</td>
+                    <td>Get presigned download URLs</td>
+                </tr>
+                <tr>
+                    <td class="method">DELETE</td>
+                    <td class="path">/v1/backups/{timestamp}</td>
+                    <td>Soft-delete a backup</td>
+                </tr>
+                <tr>
+                    <td class="method">POST</td>
+                    <td class="path">/v1/backups/{timestamp}/undelete</td>
+                    <td>Restore a soft-deleted backup</td>
+                </tr>
+            </tbody>
+        </table>
+    </section>
+
+    <footer>
+        <div class="footer-links">
+            <a href="https://zenithstudio.io">Zenith Venture Studio</a>
+            <a href="https://openclaw.ai">OpenClaw</a>
+            <a href="https://github.com/zenithventure/openclaw-agent-backup">GitHub</a>
+        </div>
+        <p>&copy; 2026 Zenith Venture Studio. Built for builders.</p>
+    </footer>
+
+</body>
+</html>
