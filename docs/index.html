@@ -159,19 +159,26 @@
         }
 
         .hero-command {
+            position: relative;
             background: var(--bg-card);
             border: 1px solid var(--border-color);
             border-radius: 12px;
-            padding: 1.5rem 2rem;
+            padding: 1.25rem 3.5rem 1.25rem 1.5rem;
             max-width: 680px;
             width: 100%;
             margin-bottom: 1.5rem;
             text-align: left;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+
+        .hero-command:hover {
+            border-color: rgba(34, 197, 94, 0.3);
         }
 
         .hero-command-label {
             font-family: 'Space Grotesk', sans-serif;
-            font-size: 0.75rem;
+            font-size: 0.7rem;
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.1em;
@@ -181,65 +188,43 @@
 
         .hero-command-text {
             font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-            font-size: 0.95rem;
-            color: var(--text-primary);
-            line-height: 1.6;
-            word-break: break-word;
-        }
-
-        .hero-command-text .dimmed {
-            color: var(--text-muted);
-        }
-
-        .hero-command-copy {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 1rem;
-            margin-top: 0.75rem;
-            padding: 0.6rem 1rem;
-            background: var(--bg-primary);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            cursor: pointer;
-            transition: border-color 0.2s;
-        }
-
-        .hero-command-copy:hover {
-            border-color: rgba(34, 197, 94, 0.4);
-        }
-
-        .hero-command-copy span {
-            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-            font-size: 0.85rem;
-            color: var(--text-primary);
-            user-select: all;
-            white-space: nowrap;
-            overflow-x: auto;
-        }
-
-        .copy-btn {
-            flex-shrink: 0;
-            background: none;
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
+            font-size: 0.9rem;
             color: var(--text-secondary);
-            font-family: 'Space Grotesk', sans-serif;
-            font-size: 0.75rem;
-            font-weight: 600;
-            padding: 0.3rem 0.75rem;
+            line-height: 1.7;
+            word-break: break-all;
+            user-select: all;
+        }
+
+        .hero-command-text .prompt {
+            color: var(--text-muted);
+            user-select: none;
+        }
+
+        .copy-icon {
+            position: absolute;
+            top: 1.25rem;
+            right: 1.25rem;
+            background: none;
+            border: none;
+            color: var(--text-muted);
             cursor: pointer;
-            transition: color 0.2s, border-color 0.2s;
+            padding: 0.25rem;
+            border-radius: 4px;
+            transition: color 0.2s;
+            line-height: 0;
         }
 
-        .copy-btn:hover {
+        .copy-icon:hover {
             color: var(--accent-green);
-            border-color: var(--accent-green);
         }
 
-        .copy-btn.copied {
+        .copy-icon.copied {
             color: var(--accent-green);
-            border-color: var(--accent-green);
+        }
+
+        .copy-icon svg {
+            width: 18px;
+            height: 18px;
         }
 
         .hero-arrow {
@@ -551,12 +536,10 @@
         <p class="hero-sub">
             Daily encrypted backups of your agent's state. Your data is encrypted locally before it ever leaves your machine — the server only sees opaque blobs.
         </p>
-        <div class="hero-command">
+        <div class="hero-command" onclick="copyCommand(this)" data-copy="Install the backup skill from https://github.com/zenithventure/openclaw-agent-backup">
             <div class="hero-command-label">Just tell your agent</div>
-            <div class="hero-command-copy" onclick="copyCommand(this)">
-                <span>Install the backup skill from https://github.com/zenithventure/openclaw-agent-backup</span>
-                <button class="copy-btn">Copy</button>
-            </div>
+            <div class="hero-command-text"><span class="prompt">&#x276F; </span>Install the backup skill from https://github.com/zenithventure/openclaw-agent-backup</div>
+            <button class="copy-icon" aria-label="Copy to clipboard"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 0 1-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 0 1 1.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 0 0-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 0 1-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 0 0-3.375-3.375h-1.5a1.125 1.125 0 0 1-1.125-1.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H9.75" /></svg></button>
         </div>
         <p class="hero-arrow">Your agent handles the rest — key generation, registration, and scheduling.</p>
         <a class="hero-cta" href="https://github.com/zenithventure/openclaw-agent-backup">View on GitHub</a>
@@ -690,14 +673,14 @@
 
     <script>
     function copyCommand(el) {
-        var text = el.querySelector('span').textContent;
+        var text = el.getAttribute('data-copy');
         navigator.clipboard.writeText(text).then(function() {
-            var btn = el.querySelector('.copy-btn');
-            btn.textContent = 'Copied!';
-            btn.classList.add('copied');
+            var icon = el.querySelector('.copy-icon');
+            icon.classList.add('copied');
+            icon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="width:18px;height:18px"><path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5" /></svg>';
             setTimeout(function() {
-                btn.textContent = 'Copy';
-                btn.classList.remove('copied');
+                icon.classList.remove('copied');
+                icon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="width:18px;height:18px"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 0 1-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 0 1 1.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 0 0-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 0 1-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 0 0-3.375-3.375h-1.5a1.125 1.125 0 0 1-1.125-1.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H9.75" /></svg>';
             }, 2000);
         });
     }
