@@ -223,7 +223,13 @@ jobs:
         run: |
           PARAMS=""
           if [ -n "${{ secrets.ADMIN_API_KEY }}" ]; then
-            PARAMS="--parameter-overrides AdminAPIKey=${{ secrets.ADMIN_API_KEY }}"
+            PARAMS="AdminAPIKey=${{ secrets.ADMIN_API_KEY }}"
+          fi
+          if [ -n "${{ secrets.CUSTOM_DOMAIN_NAME }}" ]; then
+            PARAMS="$PARAMS CustomDomainName=${{ secrets.CUSTOM_DOMAIN_NAME }} CertificateArn=${{ secrets.CERTIFICATE_ARN }}"
+          fi
+          if [ -n "$PARAMS" ]; then
+            PARAMS="--parameter-overrides $PARAMS"
           fi
           sam deploy \
             --config-env ci \

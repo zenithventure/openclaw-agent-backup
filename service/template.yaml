@@ -32,6 +32,14 @@ Parameters:
   DeleteGraceHours:
     Type: Number
     Default: 72
+  CustomDomainName:
+    Type: String
+    Default: ""
+    Description: Custom domain name (e.g. agentbackup.zenithstudio.app). Leave empty to skip.
+  CertificateArn:
+    Type: String
+    Default: ""
+    Description: ACM certificate ARN for the custom domain. Required if CustomDomainName is set.
 
 Globals:
   Function:
@@ -40,6 +48,9 @@ Globals:
     Runtime: provided.al2023
     Architectures:
       - arm64
+
+Conditions:
+  HasCustomDomain: !Not [!Equals [!Ref CustomDomainName, ""]]
 
 Resources:
 
@@ -175,6 +186,27 @@ Resources:
         ThrottlingBurstLimit: 20
         ThrottlingRateLimit: 10
 
+  # -----------------------------------------------------------------------
+  # Custom Domain (conditional — only created when CustomDomainName is set)
+  # -----------------------------------------------------------------------
+  CustomDomain:
+    Type: AWS::ApiGatewayV2::DomainName
+    Condition: HasCustomDomain
+    Properties:
+      DomainName: !Ref CustomDomainName
+      DomainNameConfigurations:
+        - EndpointType: REGIONAL
+          CertificateArn: !Ref CertificateArn
+
+  ApiMapping:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    Condition: HasCustomDomain
+    DependsOn: CustomDomain
+    Properties:
+      DomainName: !Ref CustomDomainName
+      ApiId: !Ref BackupApi
+      Stage: "$default"
+
 Outputs:
   ApiUrl:
     Description: Backup Service API URL
@@ -188,3 +220,7 @@ Outputs:
   BackupsTableName:
     Description: DynamoDB table for backups
     Value: !Ref BackupsTable
+  CustomDomainTarget:
+    Condition: HasCustomDomain
+    Description: CNAME target for the custom domain
+    Value: !GetAtt CustomDomain.RegionalDomainName
