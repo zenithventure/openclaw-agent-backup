@@ -10,3 +10,11 @@ s3_prefix = "openclaw-backup-service"
 region = "us-east-1"
 confirm_changeset = true
 capabilities = "CAPABILITY_IAM"
+
+# CI environment — uses explicit s3-bucket instead of resolve_s3
+[ci.deploy.parameters]
+stack_name = "openclaw-backup-service"
+s3_prefix = "openclaw-backup-service"
+region = "us-east-1"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM"

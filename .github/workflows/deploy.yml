@@ -94,6 +94,7 @@ jobs:
             PARAMS="--parameter-overrides AdminAPIKey=${{ secrets.ADMIN_API_KEY }}"
           fi
           sam deploy \
+            --config-env ci \
             --stack-name ${{ env.STACK_NAME }} \
             --region ${{ env.AWS_REGION }} \
             --no-confirm-changeset \
@@ -147,6 +148,7 @@ jobs:
             PARAMS="--parameter-overrides AdminAPIKey=${{ secrets.ADMIN_API_KEY }}"
           fi
           sam deploy \
+            --config-env ci \
             --stack-name ${{ env.STACK_NAME }} \
             --region ${{ env.AWS_REGION }} \
             --no-confirm-changeset \
@@ -200,6 +202,7 @@ jobs:
             PARAMS="--parameter-overrides AdminAPIKey=${{ secrets.ADMIN_API_KEY }}"
           fi
           sam deploy \
+            --config-env ci \
             --stack-name ${{ env.STACK_NAME }} \
             --region ${{ env.AWS_REGION }} \
             --no-confirm-changeset \
