@@ -49,7 +49,7 @@ Resources:
   BackupBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "openclaw-backups-${AWS::AccountId}"
+      BucketName: !Sub "openclaw-serverless-backups-${AWS::AccountId}"
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
