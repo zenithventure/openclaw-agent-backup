@@ -189,10 +189,26 @@ if has_cmd openclaw; then
     OPENCLAW_VERSION="$(openclaw --version 2>/dev/null || echo 'unknown')"
 fi
 
-# Try to extract agent name from workspace
-AGENT_NAME="default"
+# Try to extract agent name from workspace IDENTITY.md
+# Look for "**Name:**" field first, then fall back to first heading
+AGENT_NAME=""
 if [[ -f "$OPENCLAW_DIR/workspace/IDENTITY.md" ]]; then
-    AGENT_NAME="$(head -1 "$OPENCLAW_DIR/workspace/IDENTITY.md" | sed 's/^#* *//' | tr -d '\n')"
+    # Try to parse "- **Name:** Value" format
+    AGENT_NAME="$(grep -E '^\s*-\s*\*\*Name:\*\*' "$OPENCLAW_DIR/workspace/IDENTITY.md" | head -1 | sed -E 's/^\s*-\s*\*\*Name:\*\*\s*//' | tr -d '\n')"
+    
+    # Fallback: skip template heading and find first real content line
+    if [[ -z "$AGENT_NAME" ]]; then
+        AGENT_NAME="$(grep -v '^#\|^$\|^\s*$' "$OPENCLAW_DIR/workspace/IDENTITY.md" | head -1 | sed 's/^#* *//' | tr -d '\n')"
+    fi
+    
+    # Last resort: extract from heading (but reject template placeholders)
+    if [[ -z "$AGENT_NAME" ]]; then
+        HEADING="$(head -1 "$OPENCLAW_DIR/workspace/IDENTITY.md" | sed 's/^#* *//' | tr -d '\n')"
+        # Reject if it looks like a template placeholder
+        if [[ ! "$HEADING" =~ ^IDENTITY\.md|^Who\ Am\ I|^Identity$ ]]; then
+            AGENT_NAME="$HEADING"
+        fi
+    fi
 fi
 [[ -z "$AGENT_NAME" ]] && AGENT_NAME="agent-$AGENT_HOSTNAME"
 
