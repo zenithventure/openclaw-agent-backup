@@ -174,6 +174,24 @@ func (s *DynamoStore) RotateAgentToken(agentID, newTokenHash string) error {
 	return err
 }
 
+func (s *DynamoStore) UpdateAgentProfile(agentID, name string) error {
+	_, err := s.client.UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(s.agentsTable),
+		Key: map[string]types.AttributeValue{
+			"id": &types.AttributeValueMemberS{Value: agentID},
+		},
+		UpdateExpression: aws.String("SET #n = :name"),
+		ExpressionAttributeNames: map[string]string{
+			"#n": "name",
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":name": &types.AttributeValueMemberS{Value: name},
+		},
+		ConditionExpression: aws.String("attribute_exists(id)"),
+	})
+	return err
+}
+
 func (s *DynamoStore) UpdateUsedBytes(agentID string) error {
 	// In DynamoDB we recalculate by querying backups
 	_, totalBytes, err := s.CountBackups(agentID)

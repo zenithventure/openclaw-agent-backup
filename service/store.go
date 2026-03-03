@@ -17,6 +17,7 @@ type DataStore interface {
 	LookupAgentByToken(token string) (*Agent, error)
 	GetAgent(id string) (*Agent, error)
 	RotateAgentToken(agentID, newTokenHash string) error
+	UpdateAgentProfile(agentID, name string) error
 	UpdateUsedBytes(agentID string) error
 	ListAgents(status string) ([]Agent, error)
 	UpdateAgentStatus(id, status string) error
