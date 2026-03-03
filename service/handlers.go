@@ -542,6 +542,64 @@ func (h *Handlers) RotateToken(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
+// PATCH /v1/agents/me
+// ---------------------------------------------------------------------------
+
+type UpdateProfileRequest struct {
+	Name string `json:"name"`
+}
+
+func (h *Handlers) UpdateProfile(w http.ResponseWriter, r *http.Request) {
+	agent := AgentFromContext(r.Context())
+
+	var req UpdateProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate name
+	if req.Name == "" {
+		jsonError(w, "name is required", http.StatusBadRequest)
+		return
+	}
+	if len(req.Name) > 100 {
+		jsonError(w, "name must be 100 characters or less", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.store.UpdateAgentProfile(agent.ID, req.Name); err != nil {
+		log.Printf("ERROR: update profile: %v", err)
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Return updated agent info
+	updated, err := h.store.GetAgent(agent.ID)
+	if err != nil || updated == nil {
+		log.Printf("ERROR: get updated agent: %v", err)
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("updated profile for agent %s: name=%s", agent.ID, req.Name)
+
+	jsonResponse(w, http.StatusOK, AgentInfoResponse{
+		AgentID:         updated.ID,
+		Name:            updated.Name,
+		Hostname:        updated.Hostname,
+		OS:              updated.OS,
+		Arch:            updated.Arch,
+		OpenClawVersion: updated.OpenClawVersion,
+		EncryptTool:     updated.EncryptTool,
+		Status:          updated.Status,
+		QuotaBytes:      updated.QuotaBytes,
+		UsedBytes:       updated.UsedBytes,
+		CreatedAt:       updated.CreatedAt.Format("2006-01-02T15:04:05Z"),
+	})
+}
+
+// ---------------------------------------------------------------------------
 // Admin handlers
 // ---------------------------------------------------------------------------
 

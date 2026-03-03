@@ -146,6 +146,11 @@ func (s *SQLiteStore) RotateAgentToken(agentID, newTokenHash string) error {
 	return err
 }
 
+func (s *SQLiteStore) UpdateAgentProfile(agentID, name string) error {
+	_, err := s.db.Exec(`UPDATE agents SET name = ? WHERE id = ?`, name, agentID)
+	return err
+}
+
 func (s *SQLiteStore) UpdateUsedBytes(agentID string) error {
 	_, err := s.db.Exec(`
 		UPDATE agents SET used_bytes = (

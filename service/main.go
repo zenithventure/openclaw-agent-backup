@@ -99,6 +99,7 @@ func buildHandler(store DataStore, s3client *S3Client, cfg *Config) http.Handler
 
 	// Agent management (auth-only, no active requirement)
 	mux.Handle("GET /v1/agents/me", Auth(store, http.HandlerFunc(h.AgentInfo)))
+	mux.Handle("PATCH /v1/agents/me", Auth(store, http.HandlerFunc(h.UpdateProfile)))
 	mux.Handle("POST /v1/agents/me/rotate-token", Auth(store, http.HandlerFunc(h.RotateToken)))
 
 	// Admin endpoints (protected by X-API-Key header)
