@@ -235,30 +235,7 @@ else
         --arg encrypt_tool "$ENCRYPT_TOOL" \
         --arg public_key "$(cat "$STATE_DIR/recipient.txt" 2>/dev/null || echo '')" \
         --arg invite_code "$INVITE_CODE" \
-        'if $invite_code != "" then
-            {
-                agent_name: $name,
-                hostname: $hostname,
-                os: $os,
-                arch: $arch,
-                openclaw_version: $version,
-                machine_fingerprint: $fingerprint,
-                encrypt_tool: $encrypt_tool,
-                public_key: $public_key,
-                invite_code: $invite_code
-            }
-        else
-            {
-                agent_name: $name,
-                hostname: $hostname,
-                os: $os,
-                arch: $arch,
-                openclaw_version: $version,
-                machine_fingerprint: $fingerprint,
-                encrypt_tool: $encrypt_tool,
-                public_key: $public_key
-            }
-        end')
+        '{agent_name: $name, hostname: $hostname, os: $os, arch: $arch, openclaw_version: $version, machine_fingerprint: $fingerprint, encrypt_tool: $encrypt_tool, public_key: $public_key} | if $invite_code != "" then . + {invite_code: $invite_code} else . end')
 
     REGISTER_RESPONSE=$(curl -sf -X POST \
         -H "Content-Type: application/json" \

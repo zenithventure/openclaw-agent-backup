@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -376,7 +377,7 @@ func (s *SQLiteStore) UseInviteCode(code string) (bool, error) {
 	var maxUses, useCount int
 	var expiresAtStr, revokedAtStr *string
 	if err := row.Scan(&maxUses, &useCount, &expiresAtStr, &revokedAtStr); err != nil {
-		if err.Error() == "sql: no rows in result set" {
+		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil
 		}
 		return false, err
@@ -421,13 +422,12 @@ func (s *SQLiteStore) ListInviteCodes() ([]InviteCode, error) {
 	var codes []InviteCode
 	for rows.Next() {
 		var ic InviteCode
-		var expiresAtStr, createdAtStr string
+		var createdAtStr string
 		var expiresAtPtr, revokedAtPtr *string
 		if err := rows.Scan(&ic.Code, &ic.MaxUses, &ic.UseCount, &expiresAtPtr, &createdAtStr, &revokedAtPtr); err != nil {
 			return nil, err
 		}
 		ic.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAtStr)
-		_ = expiresAtStr
 		if expiresAtPtr != nil {
 			t, err := time.Parse("2006-01-02 15:04:05", *expiresAtPtr)
 			if err == nil {

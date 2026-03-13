@@ -754,8 +754,9 @@ func (h *Handlers) AdminCreateInviteCode(w http.ResponseWriter, r *http.Request)
 	}
 
 	ic := &InviteCode{
-		Code:    code,
-		MaxUses: req.MaxUses,
+		Code:      code,
+		MaxUses:   req.MaxUses,
+		CreatedAt: time.Now().UTC(),
 	}
 	if req.ExpiresInHours > 0 {
 		exp := time.Now().UTC().Add(time.Duration(req.ExpiresInHours) * time.Hour)

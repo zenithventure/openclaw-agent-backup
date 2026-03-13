@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -611,7 +612,11 @@ func (s *DynamoStore) UseInviteCode(code string) (bool, error) {
 	})
 	if err != nil {
 		// ConditionalCheckFailedException means the code was used concurrently
-		return false, nil
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return false, nil
+		}
+		return false, fmt.Errorf("update invite code use_count: %w", err)
 	}
 
 	return true, nil
