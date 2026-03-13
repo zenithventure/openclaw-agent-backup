@@ -31,11 +31,26 @@ type DataStore interface {
 	DeleteBackup(agentID, timestamp string) (*Backup, error)
 	DeleteAllBackups(agentID string) ([]Backup, error)
 	UndeleteBackup(agentID, timestamp string) error
+
+	// Invite codes
+	CreateInviteCode(code *InviteCode) error
+	UseInviteCode(code string) (valid bool, err error) // atomic: check + increment use count
+	ListInviteCodes() ([]InviteCode, error)
+	RevokeInviteCode(code string) error
 }
 
 // ---------------------------------------------------------------------------
 // Shared model types
 // ---------------------------------------------------------------------------
+
+type InviteCode struct {
+	Code      string
+	MaxUses   int        // 0 = unlimited
+	UseCount  int
+	ExpiresAt *time.Time // nil = no expiry
+	CreatedAt time.Time
+	RevokedAt *time.Time
+}
 
 type Agent struct {
 	ID              string

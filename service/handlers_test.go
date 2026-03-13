@@ -993,3 +993,265 @@ func TestAPIKeyAuth_RotatedKey(t *testing.T) {
 		t.Error("new-key should be accepted during rotation")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Invite code tests
+// ---------------------------------------------------------------------------
+
+func TestRegisterWithValidInviteCode(t *testing.T) {
+	h, cleanup := setupTestService(t)
+	defer cleanup()
+
+	// Create an invite code directly in the store
+	ic := &InviteCode{
+		Code:    "ZNTH-TESTCODE",
+		MaxUses: 5,
+	}
+	if err := h.store.CreateInviteCode(ic); err != nil {
+		t.Fatalf("CreateInviteCode: %v", err)
+	}
+
+	body := `{"agent_name":"invite-agent","hostname":"testhost","os":"Linux","arch":"x86_64","invite_code":"ZNTH-TESTCODE"}`
+	req := httptest.NewRequest("POST", "/v1/agents/register", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.Register(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp RegisterResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if resp.Status != "active" {
+		t.Errorf("expected status active with valid invite code, got %s", resp.Status)
+	}
+
+	// Verify agent is active in store
+	agent, err := h.store.LookupAgentByToken(resp.Token)
+	if err != nil || agent == nil {
+		t.Fatalf("expected agent, got nil or err: %v", err)
+	}
+	if agent.Status != "active" {
+		t.Errorf("expected agent status active, got %s", agent.Status)
+	}
+}
+
+func TestRegisterWithInvalidInviteCode(t *testing.T) {
+	h, cleanup := setupTestService(t)
+	defer cleanup()
+
+	body := `{"agent_name":"bad-code-agent","hostname":"testhost","invite_code":"ZNTH-BADCODE1"}`
+	req := httptest.NewRequest("POST", "/v1/agents/register", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.Register(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid invite code, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]string
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["error"] != "invalid or expired invite code" {
+		t.Errorf("expected specific error message, got: %s", resp["error"])
+	}
+}
+
+func TestRegisterWithExhaustedInviteCode(t *testing.T) {
+	h, cleanup := setupTestService(t)
+	defer cleanup()
+
+	// Create a single-use invite code and exhaust it
+	ic := &InviteCode{
+		Code:    "ZNTH-ONEUSE11",
+		MaxUses: 1,
+	}
+	if err := h.store.CreateInviteCode(ic); err != nil {
+		t.Fatalf("CreateInviteCode: %v", err)
+	}
+
+	// Use it once
+	valid, err := h.store.UseInviteCode("ZNTH-ONEUSE11")
+	if err != nil || !valid {
+		t.Fatalf("expected valid on first use, got valid=%v err=%v", valid, err)
+	}
+
+	// Try to register with exhausted code
+	body := `{"agent_name":"exhausted-agent","hostname":"testhost","invite_code":"ZNTH-ONEUSE11"}`
+	req := httptest.NewRequest("POST", "/v1/agents/register", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.Register(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for exhausted invite code, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestRegisterWithExpiredInviteCode(t *testing.T) {
+	h, cleanup := setupTestService(t)
+	defer cleanup()
+
+	// Create an already-expired invite code
+	past := time.Now().UTC().Add(-1 * time.Hour)
+	ic := &InviteCode{
+		Code:      "ZNTH-EXPIRED1",
+		MaxUses:   0,
+		ExpiresAt: &past,
+	}
+	if err := h.store.CreateInviteCode(ic); err != nil {
+		t.Fatalf("CreateInviteCode: %v", err)
+	}
+
+	body := `{"agent_name":"expired-agent","hostname":"testhost","invite_code":"ZNTH-EXPIRED1"}`
+	req := httptest.NewRequest("POST", "/v1/agents/register", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.Register(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for expired invite code, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestRegisterWithoutInviteCode_StillPending(t *testing.T) {
+	h, cleanup := setupTestService(t)
+	defer cleanup()
+
+	body := `{"agent_name":"no-code-agent","hostname":"testhost"}`
+	req := httptest.NewRequest("POST", "/v1/agents/register", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.Register(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp RegisterResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Status != "pending" {
+		t.Errorf("expected status pending without invite code, got %s", resp.Status)
+	}
+}
+
+func TestAdminCreateInviteCode(t *testing.T) {
+	h, cleanup := setupTestService(t)
+	defer cleanup()
+
+	body := `{"max_uses": 10, "expires_in_hours": 48}`
+	req := httptest.NewRequest("POST", "/v1/admin/invite-codes", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.AdminCreateInviteCode(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp InviteCodeResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if resp.Code == "" {
+		t.Error("expected non-empty code")
+	}
+	if len(resp.Code) != 13 { // "ZNTH-" + 8 chars = 13
+		t.Errorf("expected code length 13, got %d: %s", len(resp.Code), resp.Code)
+	}
+	if resp.Code[:5] != "ZNTH-" {
+		t.Errorf("expected code to start with ZNTH-, got %s", resp.Code)
+	}
+	if resp.MaxUses != 10 {
+		t.Errorf("expected max_uses 10, got %d", resp.MaxUses)
+	}
+	if resp.ExpiresAt == nil {
+		t.Error("expected expires_at to be set")
+	}
+}
+
+func TestAdminListInviteCodes(t *testing.T) {
+	h, cleanup := setupTestService(t)
+	defer cleanup()
+
+	// Create some codes
+	for _, code := range []string{"ZNTH-LIST0001", "ZNTH-LIST0002"} {
+		ic := &InviteCode{Code: code, MaxUses: 5}
+		if err := h.store.CreateInviteCode(ic); err != nil {
+			t.Fatalf("CreateInviteCode: %v", err)
+		}
+	}
+
+	req := httptest.NewRequest("GET", "/v1/admin/invite-codes", nil)
+	w := httptest.NewRecorder()
+
+	h.AdminListInviteCodes(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp []InviteCodeResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp) != 2 {
+		t.Errorf("expected 2 invite codes, got %d", len(resp))
+	}
+}
+
+func TestAdminRevokeInviteCode(t *testing.T) {
+	h, cleanup := setupTestService(t)
+	defer cleanup()
+
+	ic := &InviteCode{Code: "ZNTH-REVOKE01", MaxUses: 10}
+	if err := h.store.CreateInviteCode(ic); err != nil {
+		t.Fatalf("CreateInviteCode: %v", err)
+	}
+
+	// Revoke it
+	req := httptest.NewRequest("DELETE", "/v1/admin/invite-codes/ZNTH-REVOKE01", nil)
+	req.SetPathValue("code", "ZNTH-REVOKE01")
+	w := httptest.NewRecorder()
+
+	h.AdminRevokeInviteCode(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Verify code is revoked (UseInviteCode returns false)
+	valid, err := h.store.UseInviteCode("ZNTH-REVOKE01")
+	if err != nil {
+		t.Fatalf("UseInviteCode: %v", err)
+	}
+	if valid {
+		t.Error("expected revoked code to be invalid")
+	}
+}
+
+func TestAdminRevokeInviteCode_NotFound(t *testing.T) {
+	h, cleanup := setupTestService(t)
+	defer cleanup()
+
+	req := httptest.NewRequest("DELETE", "/v1/admin/invite-codes/ZNTH-NOTFOUND", nil)
+	req.SetPathValue("code", "ZNTH-NOTFOUND")
+	w := httptest.NewRecorder()
+
+	h.AdminRevokeInviteCode(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for non-existent code, got %d: %s", w.Code, w.Body.String())
+	}
+}

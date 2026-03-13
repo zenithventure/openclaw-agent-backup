@@ -80,6 +80,21 @@ func migrateSQLite(db *sql.DB) error {
 	// Migration: add deleted_at column for soft-delete
 	_, _ = db.Exec(`ALTER TABLE backups ADD COLUMN deleted_at TEXT`)
 
+	// Migration: invite codes table
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS invite_codes (
+			code       TEXT PRIMARY KEY,
+			max_uses   INTEGER NOT NULL DEFAULT 0,
+			use_count  INTEGER NOT NULL DEFAULT 0,
+			expires_at TEXT,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			revoked_at TEXT
+		)
+	`)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -327,5 +342,119 @@ func (s *SQLiteStore) UndeleteBackup(agentID, timestamp string) error {
 		return fmt.Errorf("backup not found or not deleted")
 	}
 	_ = s.UpdateUsedBytes(agentID)
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Invite code operations
+// ---------------------------------------------------------------------------
+
+func (s *SQLiteStore) CreateInviteCode(code *InviteCode) error {
+	var expiresAt interface{}
+	if code.ExpiresAt != nil {
+		expiresAt = code.ExpiresAt.UTC().Format("2006-01-02 15:04:05")
+	}
+	_, err := s.db.Exec(`
+		INSERT INTO invite_codes (code, max_uses, use_count, expires_at)
+		VALUES (?, ?, 0, ?)`,
+		code.Code, code.MaxUses, expiresAt,
+	)
+	return err
+}
+
+func (s *SQLiteStore) UseInviteCode(code string) (bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	row := tx.QueryRow(`
+		SELECT max_uses, use_count, expires_at, revoked_at
+		FROM invite_codes WHERE code = ?`, code)
+
+	var maxUses, useCount int
+	var expiresAtStr, revokedAtStr *string
+	if err := row.Scan(&maxUses, &useCount, &expiresAtStr, &revokedAtStr); err != nil {
+		if err.Error() == "sql: no rows in result set" {
+			return false, nil
+		}
+		return false, err
+	}
+
+	// Check revoked
+	if revokedAtStr != nil {
+		return false, nil
+	}
+
+	// Check expiry
+	if expiresAtStr != nil {
+		exp, err := time.Parse("2006-01-02 15:04:05", *expiresAtStr)
+		if err == nil && time.Now().UTC().After(exp) {
+			return false, nil
+		}
+	}
+
+	// Check max uses (0 = unlimited)
+	if maxUses > 0 && useCount >= maxUses {
+		return false, nil
+	}
+
+	// Atomic increment
+	_, err = tx.Exec(`UPDATE invite_codes SET use_count = use_count + 1 WHERE code = ?`, code)
+	if err != nil {
+		return false, err
+	}
+
+	return true, tx.Commit()
+}
+
+func (s *SQLiteStore) ListInviteCodes() ([]InviteCode, error) {
+	rows, err := s.db.Query(`
+		SELECT code, max_uses, use_count, expires_at, created_at, revoked_at
+		FROM invite_codes ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var codes []InviteCode
+	for rows.Next() {
+		var ic InviteCode
+		var expiresAtStr, createdAtStr string
+		var expiresAtPtr, revokedAtPtr *string
+		if err := rows.Scan(&ic.Code, &ic.MaxUses, &ic.UseCount, &expiresAtPtr, &createdAtStr, &revokedAtPtr); err != nil {
+			return nil, err
+		}
+		ic.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAtStr)
+		_ = expiresAtStr
+		if expiresAtPtr != nil {
+			t, err := time.Parse("2006-01-02 15:04:05", *expiresAtPtr)
+			if err == nil {
+				ic.ExpiresAt = &t
+			}
+		}
+		if revokedAtPtr != nil {
+			t, err := time.Parse("2006-01-02 15:04:05", *revokedAtPtr)
+			if err == nil {
+				ic.RevokedAt = &t
+			}
+		}
+		codes = append(codes, ic)
+	}
+	return codes, rows.Err()
+}
+
+func (s *SQLiteStore) RevokeInviteCode(code string) error {
+	res, err := s.db.Exec(`
+		UPDATE invite_codes SET revoked_at = datetime('now')
+		WHERE code = ? AND revoked_at IS NULL`, code)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("invite code not found or already revoked: %s", code)
+	}
 	return nil
 }
