@@ -107,6 +107,11 @@ func buildHandler(store DataStore, s3client *S3Client, cfg *Config) http.Handler
 	mux.Handle("POST /v1/admin/agents/{id}/approve", APIKeyAuth(cfg.AdminAPIKey, http.HandlerFunc(h.AdminApproveAgent)))
 	mux.Handle("POST /v1/admin/agents/{id}/suspend", APIKeyAuth(cfg.AdminAPIKey, http.HandlerFunc(h.AdminSuspendAgent)))
 
+	// Admin invite code endpoints
+	mux.Handle("POST /v1/admin/invite-codes", APIKeyAuth(cfg.AdminAPIKey, http.HandlerFunc(h.AdminCreateInviteCode)))
+	mux.Handle("GET /v1/admin/invite-codes", APIKeyAuth(cfg.AdminAPIKey, http.HandlerFunc(h.AdminListInviteCodes)))
+	mux.Handle("DELETE /v1/admin/invite-codes/{code}", APIKeyAuth(cfg.AdminAPIKey, http.HandlerFunc(h.AdminRevokeInviteCode)))
+
 	// Health
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

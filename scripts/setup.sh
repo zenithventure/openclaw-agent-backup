@@ -223,6 +223,8 @@ if [[ -f "$STATE_DIR/agent.token" ]]; then
 else
     info "Registering with backup service at $BACKUP_SERVICE_URL ..."
 
+    INVITE_CODE="${OPENCLAW_BACKUP_INVITE_CODE:-}"
+
     REGISTER_PAYLOAD=$(jq -n \
         --arg name "$AGENT_NAME" \
         --arg hostname "$AGENT_HOSTNAME" \
@@ -232,16 +234,8 @@ else
         --arg fingerprint "$MACHINE_FINGERPRINT" \
         --arg encrypt_tool "$ENCRYPT_TOOL" \
         --arg public_key "$(cat "$STATE_DIR/recipient.txt" 2>/dev/null || echo '')" \
-        '{
-            agent_name: $name,
-            hostname: $hostname,
-            os: $os,
-            arch: $arch,
-            openclaw_version: $version,
-            machine_fingerprint: $fingerprint,
-            encrypt_tool: $encrypt_tool,
-            public_key: $public_key
-        }')
+        --arg invite_code "$INVITE_CODE" \
+        '{agent_name: $name, hostname: $hostname, os: $os, arch: $arch, openclaw_version: $version, machine_fingerprint: $fingerprint, encrypt_tool: $encrypt_tool, public_key: $public_key} | if $invite_code != "" then . + {invite_code: $invite_code} else . end')
 
     REGISTER_RESPONSE=$(curl -sf -X POST \
         -H "Content-Type: application/json" \

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -39,6 +40,19 @@ type dynamoAgent struct {
 	QuotaBytes      int64  `dynamodbav:"quota_bytes"`
 	UsedBytes       int64  `dynamodbav:"used_bytes"`
 	CreatedAt       string `dynamodbav:"created_at"`
+}
+
+// dynamoInviteCode is stored in the agents table with id = "INVITE#<code>"
+// and item_type = "invite_code" to distinguish from agent items.
+type dynamoInviteCode struct {
+	ID        string  `dynamodbav:"id"`       // "INVITE#<code>"
+	ItemType  string  `dynamodbav:"item_type"` // "invite_code"
+	Code      string  `dynamodbav:"code"`
+	MaxUses   int     `dynamodbav:"max_uses"`
+	UseCount  int     `dynamodbav:"use_count"`
+	ExpiresAt *int64  `dynamodbav:"expires_at_epoch,omitempty"` // Unix timestamp, nil = no expiry
+	CreatedAt string  `dynamodbav:"created_at"`
+	RevokedAt string  `dynamodbav:"revoked_at,omitempty"`
 }
 
 type dynamoBackup struct {
@@ -215,10 +229,12 @@ func (s *DynamoStore) UpdateUsedBytes(agentID string) error {
 func (s *DynamoStore) ListAgents(status string) ([]Agent, error) {
 	input := &dynamodb.ScanInput{
 		TableName: aws.String(s.agentsTable),
+		// Exclude invite code items (which have item_type = "invite_code")
+		FilterExpression: aws.String("attribute_not_exists(item_type)"),
 	}
 
 	if status != "" {
-		input.FilterExpression = aws.String("#s = :s")
+		input.FilterExpression = aws.String("attribute_not_exists(item_type) AND #s = :s")
 		input.ExpressionAttributeNames = map[string]string{
 			"#s": "status",
 		}
@@ -246,7 +262,7 @@ func (s *DynamoStore) ListAgents(status string) ([]Agent, error) {
 func (s *DynamoStore) CountAgentsByStatus(status string) (int, error) {
 	out, err := s.client.Scan(context.Background(), &dynamodb.ScanInput{
 		TableName:        aws.String(s.agentsTable),
-		FilterExpression: aws.String("#s = :s"),
+		FilterExpression: aws.String("attribute_not_exists(item_type) AND #s = :s"),
 		ExpressionAttributeNames: map[string]string{
 			"#s": "status",
 		},
@@ -503,6 +519,164 @@ func (s *DynamoStore) UndeleteBackup(agentID, timestamp string) error {
 	}
 
 	_ = s.UpdateUsedBytes(agentID)
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Invite code operations
+// ---------------------------------------------------------------------------
+
+func (s *DynamoStore) CreateInviteCode(code *InviteCode) error {
+	item := dynamoInviteCode{
+		ID:        "INVITE#" + code.Code,
+		ItemType:  "invite_code",
+		Code:      code.Code,
+		MaxUses:   code.MaxUses,
+		UseCount:  0,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	if code.ExpiresAt != nil {
+		epoch := code.ExpiresAt.Unix()
+		item.ExpiresAt = &epoch
+	}
+
+	av, err := attributevalue.MarshalMap(item)
+	if err != nil {
+		return fmt.Errorf("marshal invite code: %w", err)
+	}
+
+	_, err = s.client.PutItem(context.Background(), &dynamodb.PutItemInput{
+		TableName: aws.String(s.agentsTable),
+		Item:      av,
+	})
+	return err
+}
+
+func (s *DynamoStore) UseInviteCode(code string) (bool, error) {
+	key := "INVITE#" + code
+
+	// First, fetch the item to check validity
+	out, err := s.client.GetItem(context.Background(), &dynamodb.GetItemInput{
+		TableName: aws.String(s.agentsTable),
+		Key: map[string]types.AttributeValue{
+			"id": &types.AttributeValueMemberS{Value: key},
+		},
+	})
+	if err != nil {
+		return false, fmt.Errorf("get invite code: %w", err)
+	}
+	if out.Item == nil {
+		return false, nil
+	}
+
+	var ic dynamoInviteCode
+	if err := attributevalue.UnmarshalMap(out.Item, &ic); err != nil {
+		return false, fmt.Errorf("unmarshal invite code: %w", err)
+	}
+
+	// Check revoked
+	if ic.RevokedAt != "" {
+		return false, nil
+	}
+
+	// Check expiry
+	if ic.ExpiresAt != nil && time.Now().Unix() > *ic.ExpiresAt {
+		return false, nil
+	}
+
+	// Check max uses (0 = unlimited)
+	if ic.MaxUses > 0 && ic.UseCount >= ic.MaxUses {
+		return false, nil
+	}
+
+	// Atomic increment with condition: use_count must still be same value (optimistic lock)
+	// Also re-check max_uses and expiry in condition
+	condExpr := "attribute_exists(id) AND attribute_not_exists(revoked_at)"
+	exprAttrValues := map[string]types.AttributeValue{
+		":inc":      &types.AttributeValueMemberN{Value: "1"},
+		":cur":      &types.AttributeValueMemberN{Value: strconv.Itoa(ic.UseCount)},
+	}
+
+	if ic.MaxUses > 0 {
+		condExpr += " AND use_count = :cur"
+	}
+
+	_, err = s.client.UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(s.agentsTable),
+		Key: map[string]types.AttributeValue{
+			"id": &types.AttributeValueMemberS{Value: key},
+		},
+		UpdateExpression:    aws.String("SET use_count = use_count + :inc"),
+		ConditionExpression: aws.String(condExpr),
+		ExpressionAttributeValues: exprAttrValues,
+	})
+	if err != nil {
+		// ConditionalCheckFailedException means the code was used concurrently
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return false, nil
+		}
+		return false, fmt.Errorf("update invite code use_count: %w", err)
+	}
+
+	return true, nil
+}
+
+func (s *DynamoStore) ListInviteCodes() ([]InviteCode, error) {
+	out, err := s.client.Scan(context.Background(), &dynamodb.ScanInput{
+		TableName:        aws.String(s.agentsTable),
+		FilterExpression: aws.String("item_type = :t"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":t": &types.AttributeValueMemberS{Value: "invite_code"},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scan invite codes: %w", err)
+	}
+
+	codes := make([]InviteCode, 0, len(out.Items))
+	for _, item := range out.Items {
+		var ic dynamoInviteCode
+		if err := attributevalue.UnmarshalMap(item, &ic); err != nil {
+			return nil, fmt.Errorf("unmarshal invite code: %w", err)
+		}
+		result := InviteCode{
+			Code:     ic.Code,
+			MaxUses:  ic.MaxUses,
+			UseCount: ic.UseCount,
+		}
+		result.CreatedAt, _ = time.Parse(time.RFC3339, ic.CreatedAt)
+		if ic.ExpiresAt != nil {
+			t := time.Unix(*ic.ExpiresAt, 0).UTC()
+			result.ExpiresAt = &t
+		}
+		if ic.RevokedAt != "" {
+			t, err := time.Parse(time.RFC3339, ic.RevokedAt)
+			if err == nil {
+				result.RevokedAt = &t
+			}
+		}
+		codes = append(codes, result)
+	}
+	return codes, nil
+}
+
+func (s *DynamoStore) RevokeInviteCode(code string) error {
+	key := "INVITE#" + code
+	_, err := s.client.UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(s.agentsTable),
+		Key: map[string]types.AttributeValue{
+			"id": &types.AttributeValueMemberS{Value: key},
+		},
+		UpdateExpression:    aws.String("SET revoked_at = :ra"),
+		ConditionExpression: aws.String("attribute_exists(id) AND attribute_not_exists(revoked_at)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":ra": &types.AttributeValueMemberS{Value: time.Now().UTC().Format(time.RFC3339)},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("revoke invite code %s: %w", code, err)
+	}
 	return nil
 }
 

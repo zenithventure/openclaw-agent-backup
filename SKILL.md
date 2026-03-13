@@ -47,11 +47,21 @@ backup service, and installs a daily scheduler:
 bash {baseDir}/scripts/setup.sh
 ```
 
+If you have an **invite code**, set it before running setup so the agent is immediately
+activated (no admin approval wait):
+
+```bash
+OPENCLAW_BACKUP_INVITE_CODE=ZNTH-XXXXXXXX bash {baseDir}/scripts/setup.sh
+```
+
 Setup is fully automatic and requires no human input. It will:
 1. Generate an age keypair (master encryption key)
 2. Register this agent with the backup service
 3. Install a daily scheduler (launchd on macOS, systemd timer on Linux, cron fallback)
-4. Run the first backup immediately
+4. Run the first backup immediately (if agent is active)
+
+**Without an invite code**, the agent starts in `pending` status and requires admin
+approval before backups can run. The scheduler will retry on schedule once approved.
 
 ## Commands
 
@@ -130,8 +140,10 @@ Set via `openclaw.json` under `skills.entries.backup`:
 - `max_backup_size_mb` -- Safety limit on uncompressed backup size (default: 500)
 
 Note: Registration is open (no API key needed). New agents start in **pending** status
-and require admin approval before backups can run. The backup scheduler handles this
-gracefully — it will retry on schedule until the agent is approved.
+and require admin approval before backups can run — unless an invite code is provided
+at registration time (see Setup above), in which case the agent is immediately **active**.
+The backup scheduler handles pending status gracefully — it will retry on schedule until
+the agent is approved.
 
 ## What gets backed up
 

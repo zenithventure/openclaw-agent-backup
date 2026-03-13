@@ -1,9 +1,11 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
 	"strconv"
 	"time"
@@ -20,14 +22,15 @@ type Handlers struct {
 // ---------------------------------------------------------------------------
 
 type RegisterRequest struct {
-	AgentName      string `json:"agent_name"`
-	Hostname       string `json:"hostname"`
-	OS             string `json:"os"`
-	Arch           string `json:"arch"`
+	AgentName       string `json:"agent_name"`
+	Hostname        string `json:"hostname"`
+	OS              string `json:"os"`
+	Arch            string `json:"arch"`
 	OpenClawVersion string `json:"openclaw_version"`
-	Fingerprint    string `json:"machine_fingerprint"`
-	EncryptTool    string `json:"encrypt_tool"`
-	PublicKey      string `json:"public_key"`
+	Fingerprint     string `json:"machine_fingerprint"`
+	EncryptTool     string `json:"encrypt_tool"`
+	PublicKey       string `json:"public_key"`
+	InviteCode      string `json:"invite_code,omitempty"`
 }
 
 type RegisterResponse struct {
@@ -74,6 +77,22 @@ func (h *Handlers) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Determine status based on invite code
+	status := "pending"
+	if req.InviteCode != "" {
+		valid, err := h.store.UseInviteCode(req.InviteCode)
+		if err != nil {
+			log.Printf("ERROR: use invite code: %v", err)
+			jsonError(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if !valid {
+			jsonError(w, "invalid or expired invite code", http.StatusBadRequest)
+			return
+		}
+		status = "active"
+	}
+
 	agent := &Agent{
 		ID:              agentID,
 		Name:            req.AgentName,
@@ -83,8 +102,8 @@ func (h *Handlers) Register(w http.ResponseWriter, r *http.Request) {
 		OpenClawVersion: req.OpenClawVersion,
 		Fingerprint:     req.Fingerprint,
 		EncryptTool:     req.EncryptTool,
-		PublicKey:        req.PublicKey,
-		Status:          "pending",
+		PublicKey:       req.PublicKey,
+		Status:          status,
 		QuotaBytes:      h.config.DefaultQuotaBytes,
 	}
 
@@ -94,12 +113,12 @@ func (h *Handlers) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("registered agent %s (%s) from %s", agentID, req.AgentName, req.Hostname)
+	log.Printf("registered agent %s (%s) from %s status=%s", agentID, req.AgentName, req.Hostname, status)
 
 	jsonResponse(w, http.StatusCreated, RegisterResponse{
 		AgentID:      agentID,
 		Token:        token,
-		Status:       "pending",
+		Status:       status,
 		QuotaMB:      h.config.DefaultQuotaBytes / (1024 * 1024),
 		BackupPrefix: agentID + "/",
 	})
@@ -667,6 +686,123 @@ func (h *Handlers) AdminSuspendAgent(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("admin suspended agent %s", id)
 	jsonResponse(w, http.StatusOK, map[string]string{"status": "suspended"})
+}
+
+// ---------------------------------------------------------------------------
+// Admin invite code handlers
+// ---------------------------------------------------------------------------
+
+// generateInviteCode returns a code of the form "ZNTH-XXXXXXXX" where X is
+// a random uppercase alphanumeric character.
+func generateInviteCode() (string, error) {
+	const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	b := make([]byte, 8)
+	for i := range b {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
+		if err != nil {
+			return "", err
+		}
+		b[i] = chars[n.Int64()]
+	}
+	return "ZNTH-" + string(b), nil
+}
+
+type CreateInviteCodeRequest struct {
+	MaxUses        int `json:"max_uses"`
+	ExpiresInHours int `json:"expires_in_hours"`
+}
+
+type InviteCodeResponse struct {
+	Code      string  `json:"code"`
+	MaxUses   int     `json:"max_uses"`
+	UseCount  int     `json:"use_count"`
+	ExpiresAt *string `json:"expires_at,omitempty"`
+	CreatedAt string  `json:"created_at"`
+	RevokedAt *string `json:"revoked_at,omitempty"`
+}
+
+func inviteCodeToResponse(ic InviteCode) InviteCodeResponse {
+	resp := InviteCodeResponse{
+		Code:      ic.Code,
+		MaxUses:   ic.MaxUses,
+		UseCount:  ic.UseCount,
+		CreatedAt: ic.CreatedAt.Format(time.RFC3339),
+	}
+	if ic.ExpiresAt != nil {
+		s := ic.ExpiresAt.Format(time.RFC3339)
+		resp.ExpiresAt = &s
+	}
+	if ic.RevokedAt != nil {
+		s := ic.RevokedAt.Format(time.RFC3339)
+		resp.RevokedAt = &s
+	}
+	return resp
+}
+
+func (h *Handlers) AdminCreateInviteCode(w http.ResponseWriter, r *http.Request) {
+	var req CreateInviteCodeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	code, err := generateInviteCode()
+	if err != nil {
+		log.Printf("ERROR: generate invite code: %v", err)
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	ic := &InviteCode{
+		Code:      code,
+		MaxUses:   req.MaxUses,
+		CreatedAt: time.Now().UTC(),
+	}
+	if req.ExpiresInHours > 0 {
+		exp := time.Now().UTC().Add(time.Duration(req.ExpiresInHours) * time.Hour)
+		ic.ExpiresAt = &exp
+	}
+
+	if err := h.store.CreateInviteCode(ic); err != nil {
+		log.Printf("ERROR: create invite code: %v", err)
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("admin created invite code %s (max_uses=%d)", code, req.MaxUses)
+	jsonResponse(w, http.StatusCreated, inviteCodeToResponse(*ic))
+}
+
+func (h *Handlers) AdminListInviteCodes(w http.ResponseWriter, r *http.Request) {
+	codes, err := h.store.ListInviteCodes()
+	if err != nil {
+		log.Printf("ERROR: list invite codes: %v", err)
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	resp := make([]InviteCodeResponse, len(codes))
+	for i, ic := range codes {
+		resp[i] = inviteCodeToResponse(ic)
+	}
+	jsonResponse(w, http.StatusOK, resp)
+}
+
+func (h *Handlers) AdminRevokeInviteCode(w http.ResponseWriter, r *http.Request) {
+	code := r.PathValue("code")
+	if code == "" {
+		jsonError(w, "code required", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.store.RevokeInviteCode(code); err != nil {
+		log.Printf("ERROR: revoke invite code %s: %v", code, err)
+		jsonError(w, "invite code not found or already revoked", http.StatusNotFound)
+		return
+	}
+
+	log.Printf("admin revoked invite code %s", code)
+	jsonResponse(w, http.StatusOK, map[string]string{"revoked": code})
 }
 
 // ---------------------------------------------------------------------------
