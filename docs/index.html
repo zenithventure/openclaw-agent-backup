@@ -592,7 +592,7 @@
                 <div class="step-number">3</div>
                 <div>
                     <h3>Agent registers with the service</h3>
-                    <p>Your agent registers and starts in <strong>pending</strong> status. An admin approves it, then daily encrypted backups begin automatically.</p>
+                    <p>Your agent registers and starts in <strong>pending</strong> status until an admin approves it. With an <strong>invite code</strong>, the agent is immediately <strong>active</strong> — no approval wait needed.</p>
                 </div>
             </div>
             <div class="step">
@@ -657,6 +657,21 @@
                     <td class="method">POST</td>
                     <td class="path">/v1/backups/{timestamp}/undelete</td>
                     <td>Restore a soft-deleted backup</td>
+                </tr>
+                <tr>
+                    <td class="method">POST</td>
+                    <td class="path">/v1/admin/invite-codes</td>
+                    <td>Create an invite code</td>
+                </tr>
+                <tr>
+                    <td class="method">GET</td>
+                    <td class="path">/v1/admin/invite-codes</td>
+                    <td>List all invite codes</td>
+                </tr>
+                <tr>
+                    <td class="method">DELETE</td>
+                    <td class="path">/v1/admin/invite-codes/{code}</td>
+                    <td>Revoke an invite code</td>
                 </tr>
             </tbody>
         </table>

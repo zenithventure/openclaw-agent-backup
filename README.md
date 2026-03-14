@@ -23,11 +23,19 @@ Then run setup (fully automatic, no human input required):
 bash ~/.openclaw/skills/backup/scripts/setup.sh
 ```
 
+If you have an **invite code**, set it before running setup so the agent is immediately activated (no admin approval wait):
+
+```bash
+OPENCLAW_BACKUP_INVITE_CODE=ZNTH-XXXXXXXX bash ~/.openclaw/skills/backup/scripts/setup.sh
+```
+
 Setup will:
 1. Generate an `age` keypair (master encryption key)
 2. Register this agent with the backup service
 3. Install a daily scheduler (launchd on macOS, systemd/cron on Linux)
-4. Run the first backup immediately
+4. Run the first backup immediately (if agent is active)
+
+**Without an invite code**, the agent starts in `pending` status and requires admin approval before backups can run. The scheduler will retry on schedule once approved.
 
 ## Requirements
 
@@ -96,7 +104,7 @@ Set via `openclaw.json` under `skills.entries.backup`:
 | `exclude_extra` | Additional glob patterns to exclude | `[]` |
 | `max_backup_size_mb` | Safety limit on uncompressed size | `500` |
 
-Registration is open — no API key needed. New agents start in **pending** status and require admin approval before backups can run. The scheduler handles this gracefully and retries until the agent is approved.
+Registration is open — no API key needed. New agents start in **pending** status and require admin approval before backups can run — unless an invite code is provided at registration time, in which case the agent is immediately **active**. The scheduler handles pending status gracefully and retries until the agent is approved.
 
 ## What gets backed up
 
@@ -161,8 +169,13 @@ OPENCLAW_BACKUP_URL=http://localhost:8080 bash scripts/setup.sh
 | `GET` | `/v1/admin/agents` | X-API-Key | List agents (optional `?status=` filter) |
 | `POST` | `/v1/admin/agents/{id}/approve` | X-API-Key | Approve a pending agent |
 | `POST` | `/v1/admin/agents/{id}/suspend` | X-API-Key | Suspend an active agent |
+| `POST` | `/v1/admin/invite-codes` | X-API-Key | Create an invite code |
+| `GET` | `/v1/admin/invite-codes` | X-API-Key | List all invite codes |
+| `DELETE` | `/v1/admin/invite-codes/{code}` | X-API-Key | Revoke an invite code |
 
 **Agent lifecycle:** `register → pending → (admin approves) → active → (admin suspends) → suspended`
+
+Agents registered with a valid invite code skip `pending` and go directly to `active`.
 
 ## Server Configuration
 
